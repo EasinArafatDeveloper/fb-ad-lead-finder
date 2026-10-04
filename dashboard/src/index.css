@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-font-smoothing: antialiased; }
+  body { @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100; }
+  :focus-visible { @apply outline-none ring-2 ring-indigo-500 ring-offset-2 ring-offset-white dark:ring-offset-slate-950; }
+}
+
+@layer components {
+  .input {
+    @apply h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm transition placeholder:text-slate-400
+      focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-500/10
+      dark:border-white/10 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500;
+  }
+  textarea.input { @apply h-auto py-2; }
+  .label { @apply mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400; }
+  .card { @apply rounded-2xl border border-slate-200 bg-white shadow-card dark:border-white/10 dark:bg-slate-900; }
+}
+
+/* thin scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+.dark ::-webkit-scrollbar-thumb { background: #334155; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* FortuneSheet: blend its chrome with the app */
+.fortune-container { font-family: Inter, 'Nirmala UI', system-ui, sans-serif; }

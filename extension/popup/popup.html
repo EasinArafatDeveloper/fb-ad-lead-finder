@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header><b>FB Ad Lead Finder</b><span id="dot" class="dot"></span></header>
+
+  <section id="stats" class="stats"></section>
+  <div id="state" class="state"></div>
+
+  <label>Server URL <input id="serverUrl" placeholder="http://localhost:4000" /></label>
+  <label>API key <input id="apiKey" type="password" placeholder="API_KEY from server/.env" /></label>
+  <label class="check"><input id="enabled" type="checkbox" /> Run the worker in this browser</label>
+
+  <div class="actions">
+    <button id="save">Save &amp; Connect</button>
+    <button id="open" class="primary">Open Dashboard</button>
+  </div>
+  <p id="msg" class="msg"></p>
+  <script src="popup.js"></script>
+</body>
+</html>

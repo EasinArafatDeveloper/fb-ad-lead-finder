@@ -1,0 +1,81 @@
+#fblf-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  width: 250px;
+  background: #fff;
+  color: #1c1e21;
+  border: 1px solid #dadde1;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+}
+#fblf-panel .fblf-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  background: #1877f2;
+  color: #fff;
+}
+#fblf-panel.fblf-running .fblf-head { background: #0a8a4a; }
+#fblf-panel .fblf-min {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+#fblf-panel.fblf-collapsed .fblf-body { display: none; }
+#fblf-panel .fblf-body { padding: 10px 12px 12px; }
+#fblf-panel .fblf-row { display: flex; justify-content: space-between; padding: 2px 0; }
+#fblf-panel .fblf-hint { color: #65676b; font-size: 12px; }
+#fblf-panel .fblf-status { min-height: 18px; margin: 6px 0; color: #444; font-size: 12px; }
+#fblf-panel .fblf-actions { display: flex; gap: 6px; }
+#fblf-panel .fblf-actions button {
+  flex: 1;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid #1877f2;
+  background: #1877f2;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+#fblf-panel .fblf-actions .fblf-stop { background: #fff; color: #1877f2; }
+#fblf-panel .fblf-actions button:disabled { opacity: 0.45; cursor: default; }
+#fblf-panel .fblf-cond {
+  margin: 8px 0 4px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: #f0f5ff;
+  border: 1px solid #d6e4ff;
+}
+#fblf-panel .fblf-cond-top { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #444; }
+#fblf-panel .fblf-min-input {
+  width: 48px;
+  padding: 3px 5px;
+  border: 1px solid #b9cdf5;
+  border-radius: 6px;
+  font: 600 13px system-ui, sans-serif;
+  text-align: center;
+}
+#fblf-panel .fblf-chips { display: flex; gap: 4px; margin-top: 6px; }
+#fblf-panel .fblf-chips button {
+  flex: 1;
+  padding: 3px 0;
+  border: 1px solid #b9cdf5;
+  border-radius: 99px;
+  background: #fff;
+  color: #1877f2;
+  font: 600 11px system-ui, sans-serif;
+  cursor: pointer;
+}
+#fblf-panel .fblf-chips button.on { background: #1877f2; border-color: #1877f2; color: #fff; }
+#fblf-panel .fblf-chips button:disabled, #fblf-panel .fblf-min-input:disabled { opacity: 0.55; cursor: default; }
+#fblf-panel .fblf-match { margin-top: 6px; font-size: 12px; color: #1c1e21; }
+#fblf-panel .fblf-match b { color: #0a8a4a; }
+#fblf-panel .fblf-match small { color: #65676b; }

@@ -1,0 +1,328 @@
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { toast } from 'sonner';
+import {
+  FolderOpen, LayoutDashboard, LogOut, Menu, Moon, Pause, Play, Search, ScrollText, Settings, Square, Sun, Users, X, Plus,
+} from 'lucide-react';
+import { api, setKey } from '../lib/api';
+import { cn } from '../lib/utils';
+import { Button, Modal } from './ui';
+
+// ---------------- live stats shared by every page ----------------
+const StatsCtx = createContext({ stats: null, refresh: () => {} });
+export const useStats = () => useContext(StatsCtx);
+
+const NAV = [
+  { label: null, items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true }] },
+  {
+    label: 'Data',
+    items: [
+      { to: '/projects', label: 'Projects', icon: FolderOpen },
+      { to: '/leads', label: 'All Leads', icon: Users },
+    ],
+  },
+  {
+    label: 'Hunt',
+    items: [{ to: '/search', label: 'Searches', icon: Search }],
+  },
+  {
+    label: 'Workspace',
+    items: [
+      { to: '/settings', label: 'Settings', icon: Settings },
+      { to: '/logs', label: 'Logs', icon: ScrollText },
+    ],
+  },
+];
+
+function Logo() {
+  return (
+    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 via-blue-600 to-cyan-500 font-display text-sm font-extrabold text-white shadow-lg shadow-indigo-500/30">
+      AL
+    </span>
+  );
+}
+
+function Sidebar({ open, onClose }) {
+  const navigate = useNavigate();
+  const { stats } = useStats();
+  return (
+    <aside
+      className={cn(
+        'fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white shadow-lg transition-transform duration-300 dark:border-white/10 dark:bg-slate-900 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:shadow-none',
+        open ? 'translate-x-0' : '-translate-x-full',
+      )}
+    >
+      <div className="flex h-16 items-center justify-between border-b border-slate-100 px-5 dark:border-white/10">
+        <NavLink to="/" className="flex items-center gap-3" onClick={onClose}>
+          <Logo />
+          <div className="leading-tight">
+            <div className="font-display text-[15px] font-extrabold tracking-tight">FB Lead Finder</div>
+            <div className="text-[11px] font-medium text-slate-400">Meta Ad Library</div>
+          </div>
+        </NavLink>
+        <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 lg:hidden" aria-label="Close navigation">
+          <X className="h-5 w-5" />
+        </button>
+      </div>
+
+      <div className="px-4 pt-4">
+        <button
+          onClick={() => {
+            navigate('/search?new=1');
+            onClose();
+          }}
+          className="group relative flex h-11 w-full items-center justify-center gap-2 overflow-hidden rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 text-sm font-semibold text-white shadow-md shadow-indigo-600/30 transition-all hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+        >
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent motion-safe:animate-shimmer" />
+          <Plus className="relative h-4 w-4" aria-hidden="true" />
+          <span className="relative">New search</span>
+        </button>
+      </div>
+
+      <nav aria-label="Main" className="flex-1 space-y-5 overflow-y-auto px-3 py-5">
+        {NAV.map((group, gi) => (
+          <div key={gi}>
+            {group.label && <p className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">{group.label}</p>}
+            <ul className="space-y-0.5">
+              {group.items.map((item) => (
+                <li key={item.to}>
+                  <NavLink to={item.to} end={item.end} onClick={onClose}>
+                    {({ isActive }) => (
+                      <span
+                        className={cn(
+                          'relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
+                          isActive ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-100',
+                        )}
+                      >
+                        {isActive && (
+                          <motion.span layoutId="sidebar-active" className="absolute inset-0 rounded-xl bg-indigo-50 dark:bg-indigo-500/15" transition={{ type: 'spring', stiffness: 420, damping: 36 }} />
+                        )}
+                        {isActive && <span aria-hidden="true" className="absolute bottom-2 left-0 top-2 w-[3px] rounded-full bg-gradient-to-b from-indigo-500 to-cyan-400" />}
+                        <item.icon className={cn('relative h-[18px] w-[18px]', isActive ? 'text-indigo-600 dark:text-indigo-300' : 'text-slate-400')} aria-hidden="true" />
+                        <span className="relative">{item.label}</span>
+                        {item.to === '/leads' && stats?.pending > 0 && (
+                          <span className="relative ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700 dark:bg-amber-500/15 dark:text-amber-300" title="Pages in the queue">
+                            {stats.pending}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </nav>
+
+      {stats && (
+        <div className="m-3 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 dark:border-white/10 dark:bg-white/5">
+          <div className="flex items-center justify-between text-xs font-semibold">
+            <span className="text-slate-500 dark:text-slate-400">Today's limit</span>
+            <span className="tabular-nums">{stats.scrapedToday}/{stats.dailyLimit}</span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
+            <div
+              className="h-full w-full origin-left rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-transform duration-700"
+              style={{ transform: `scaleX(${Math.min(1, stats.scrapedToday / Math.max(1, stats.dailyLimit))})` }}
+            />
+          </div>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+/**
+ * Work control in the header — only shown while a project is being worked on:
+ *   running → "Running · <project>"  [Pause] [Stop]
+ *   paused  → "Paused"               [Resume] [Stop]
+ * Nothing to do → hidden.
+ */
+function RunnerPill() {
+  const { stats, refresh } = useStats();
+  const [busy, setBusy] = useState('');
+  const [confirmStop, setConfirmStop] = useState(false);
+  if (!stats?.active) return null;
+
+  const toggle = async () => {
+    setBusy('toggle');
+    try {
+      await api('/settings', { method: 'PUT', body: { running: !stats.running } });
+      await refresh();
+      toast.success(stats.running ? 'Paused' : 'Resumed');
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+  const stop = async () => {
+    setBusy('stop');
+    try {
+      const r = await api('/runner/stop', { method: 'POST' });
+      setConfirmStop(false);
+      await refresh();
+      toast.success('Stopped', { description: `${r.searches} searches and ${r.pages} pages cancelled. Everything found so far is kept.` });
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const doing = stats.collecting ? 'collecting ads' : stats.pending ? 'reading pages' : 'starting';
+  return (
+    <>
+      <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-2">
+        <span
+          className={cn(
+            'hidden max-w-[320px] items-center gap-2 truncate rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset sm:inline-flex',
+            stats.running
+              ? 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30'
+              : 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30',
+          )}
+          title={stats.pausedReason || stats.activeName || ''}
+        >
+          <span className={cn('h-2 w-2 shrink-0 rounded-full bg-current', stats.running && 'animate-pulse')} />
+          <span className="truncate">
+            {stats.running ? 'Running' : 'Paused'}
+            {stats.activeName && ` · ${stats.activeName}`}
+            {stats.running ? ` — ${doing}` : stats.pausedReason ? ` — ${stats.pausedReason}` : ''}
+          </span>
+        </span>
+        <button
+          onClick={toggle}
+          disabled={!!busy}
+          className={cn(
+            'inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold shadow-sm transition disabled:opacity-50',
+            stats.running
+              ? 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-white/5'
+              : 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-indigo-600/25 hover:shadow-md',
+          )}
+        >
+          {stats.running ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+          {stats.running ? 'Pause' : 'Resume'}
+        </button>
+        <button
+          onClick={() => setConfirmStop(true)}
+          disabled={!!busy}
+          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-600 shadow-sm transition hover:bg-rose-50 disabled:opacity-50 dark:border-rose-500/30 dark:bg-slate-900 dark:hover:bg-rose-500/10"
+        >
+          <Square className="h-3 w-3 fill-current" /> Stop
+        </button>
+      </motion.div>
+
+      <Modal
+        open={confirmStop}
+        onClose={() => setConfirmStop(false)}
+        title="Stop the work?"
+        width="max-w-md"
+        footer={
+          <>
+            <Button onClick={() => setConfirmStop(false)}>No, keep going</Button>
+            <Button variant="danger" loading={busy === 'stop'} onClick={stop}>
+              {busy !== 'stop' && <Square className="h-3.5 w-3.5 fill-current" />} Stop
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm text-slate-600 dark:text-slate-300">
+          <p>Work that hasn't happened yet will be cancelled:</p>
+          <ul className="grid grid-cols-2 gap-2">
+            <li className="rounded-xl bg-rose-50 px-3 py-2 dark:bg-rose-500/10">
+              <span className="block font-display text-lg font-extrabold tabular-nums text-rose-700 dark:text-rose-300">{stats.queuedJobs + stats.collecting}</span>
+              <span className="text-xs text-rose-700/80 dark:text-rose-300/80">Search</span>
+            </li>
+            <li className="rounded-xl bg-rose-50 px-3 py-2 dark:bg-rose-500/10">
+              <span className="block font-display text-lg font-extrabold tabular-nums text-rose-700 dark:text-rose-300">{stats.pending}</span>
+              <span className="text-xs text-rose-700/80 dark:text-rose-300/80">Unread pages</span>
+            </li>
+          </ul>
+          <p className="text-xs text-slate-500">
+            All leads and contacts found so far are kept. You can restart the stopped pages later from the project folder. To stop only for a while, use <b>Pause</b>.
+          </p>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function ThemeToggle() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  const toggle = () => {
+    const next = !dark;
+    setDark(next);
+    document.documentElement.classList.toggle('dark', next);
+    try {
+      localStorage.setItem('fblf_theme', next ? 'dark' : 'light');
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <button onClick={toggle} aria-label={dark ? 'Light mode' : 'Dark mode'} className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-white">
+      {dark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
+    </button>
+  );
+}
+
+export default function Layout() {
+  const [open, setOpen] = useState(false);
+  const [stats, setStats] = useState(null);
+  const location = useLocation();
+  const fullBleed = /\/s\//.test(location.pathname); // sheet view uses the whole width
+
+  const refresh = useCallback(async () => {
+    try {
+      setStats(await api('/stats'));
+    } catch {
+      /* auth errors are handled globally */
+    }
+  }, []);
+  useEffect(() => {
+    refresh();
+    const t = setInterval(() => !document.hidden && refresh(), 20000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  return (
+    <StatsCtx.Provider value={{ stats, refresh }}>
+      <div className="flex min-h-screen">
+        {open && <div className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm lg:hidden" onClick={() => setOpen(false)} aria-hidden="true" />}
+        <Sidebar open={open} onClose={() => setOpen(false)} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white/80 px-4 backdrop-blur-md dark:border-white/10 dark:bg-slate-900/80 sm:px-6">
+            <button onClick={() => setOpen(true)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:hidden" aria-label="Open navigation">
+              <Menu className="h-5 w-5" />
+            </button>
+            <div className="flex-1" />
+            <RunnerPill />
+            <ThemeToggle />
+            <button
+              onClick={() => {
+                setKey('');
+                window.dispatchEvent(new Event('fblf:logout'));
+              }}
+              aria-label="Logout"
+              title="Logout"
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 dark:text-slate-400 dark:hover:bg-rose-500/10"
+            >
+              <LogOut className="h-[18px] w-[18px]" />
+            </button>
+          </header>
+          {stats?.worker?.outdated && stats.worker.seenAgo < 600 && (
+            <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 sm:px-6">
+              <b>An old extension version is running ({stats.worker.version}) — latest is {stats.worker.latest}.</b>
+              <span>Open <code className="rounded bg-amber-100 px-1 dark:bg-amber-500/20">chrome://extensions</code> in Chrome and press <b>↻ Reload</b> on FB Ad Lead Finder.</span>
+            </div>
+          )}
+          <main id="main" className={cn('w-full flex-1', fullBleed ? 'p-0' : 'mx-auto max-w-7xl p-4 sm:p-6 lg:p-8')}>
+            <Outlet />
+          </main>
+        </div>
+      </div>
+    </StatsCtx.Provider>
+  );
+}

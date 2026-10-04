@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm install --prefix server && npm install --prefix dashboard",
+  "buildCommand": "npm run build --prefix dashboard",
+  "outputDirectory": "dashboard/dist",
+  "functions": {
+    "api/index.mjs": {
+      "maxDuration": 60,
+      "includeFiles": "{apps-script/Code.gs,extension/manifest.json}"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api" },
+    { "source": "/apps-script.gs", "destination": "/api" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "crons": [{ "path": "/api/cron/sync", "schedule": "0 3 * * *" }]
+}
