@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FB Ad Lead Finder",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Finds active advertisers in the Meta Ad Library and collects their public business contact details into your own dashboard.",
   "permissions": [
     "storage",
@@ -9,13 +9,13 @@
     "scripting",
     "alarms",
     "notifications",
-    "declarativeNetRequest"
+    "declarativeNetRequest",
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider"
   ],
   "host_permissions": [
-    "https://*.facebook.com/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*",
-    "https://*.vercel.app/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

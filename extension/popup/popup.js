@@ -13,6 +13,9 @@ function renderStats(s) {
     ['Today', `${s.doneToday}/${s.dailyLimit}`],
     ['Searches', s.queuedJobs + s.collecting],
   ];
+  if (s.proxy) {
+    stats.push(['Proxy', s.proxy.enabled ? 'Active' : 'Off']);
+  }
   $('stats').replaceChildren(
     ...stats.map(([k, v]) => {
       const d = document.createElement('div');

@@ -34,7 +34,10 @@ r.get('/status', ah(async () => {
     col('jobs').countDocuments({ phase: 'queued' }),
     col('jobs').countDocuments({ phase: 'collecting' }),
   ]);
-  return { pages, pending, doneToday, dailyLimit: s.dailyLimit, queuedJobs, collecting, running: s.running, pausedReason: s.pausedReason, worker: await workerInfo() };
+  return {
+    pages, pending, doneToday, dailyLimit: s.dailyLimit, queuedJobs, collecting, running: s.running, pausedReason: s.pausedReason, worker: await workerInfo(),
+    proxy: { enabled: Boolean(s.proxyEnabled), host: s.proxyHost || '', port: Number(s.proxyPort) || 44445, user: s.proxyUser || '', pass: s.proxyPass || '' },
+  };
 }));
 
 r.get('/next-collect', ah(async () => {
@@ -144,6 +147,7 @@ r.get('/next-scrape', ah(async (req) => {
   return {
     lead: { pageId: p.pageId, pageName: p.pageName, url: mainUrl(p) || aboutUrl(p), mainUrl: mainUrl(p) },
     delayMin: s.delayMin, delayMax: s.delayMax, parallel: s.parallel, fullDetails: s.fullDetails, doneToday, dailyLimit: s.dailyLimit,
+    proxy: { enabled: Boolean(s.proxyEnabled), host: s.proxyHost || '', port: Number(s.proxyPort) || 44445, user: s.proxyUser || '', pass: s.proxyPass || '' },
   };
 }));
 

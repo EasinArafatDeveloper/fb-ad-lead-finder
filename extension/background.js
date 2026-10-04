@@ -42,6 +42,88 @@ function notify(title, message) {
   chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon128.png', title, message, priority: 2 });
 }
 
+// ---------------- proxy configuration ----------------
+let cachedProxy = null;
+
+async function syncProxy(proxy) {
+  if (!proxy) return;
+  const cfg = {
+    enabled: Boolean(proxy.enabled),
+    host: String(proxy.host || '').trim(),
+    port: Number(proxy.port) || 44445,
+    user: String(proxy.user || '').trim(),
+    pass: String(proxy.pass || '').trim(),
+  };
+
+  const key = `${cfg.enabled}:${cfg.host}:${cfg.port}:${cfg.user}:${cfg.pass}`;
+  if (cachedProxy && cachedProxy._key === key) return;
+  cfg._key = key;
+  cachedProxy = cfg;
+  await chrome.storage.local.set({ activeProxy: cfg }).catch(() => {});
+
+  if (!cfg.enabled || !cfg.host || !cfg.port) {
+    try {
+      await chrome.proxy.settings.clear({ scope: 'regular' });
+      await setStatus({ proxyActive: false });
+      console.log('[Proxy] Cleared (Direct mode)');
+    } catch (e) {
+      console.warn('Proxy clear error:', e);
+    }
+    return;
+  }
+
+  // PAC script: route *.facebook.com, facebook.com, *.fbcdn.net, fbcdn.net through the proxy.
+  // Localhost, 127.0.0.1 and private IPs go DIRECT so local server communication is untouched.
+  const pac = `
+    function FindProxyForURL(url, host) {
+      if (shExpMatch(host, "localhost") || host === "127.0.0.1" || isInNet(host, "10.0.0.0", "255.0.0.0") || isInNet(host, "172.16.0.0", "255.240.0.0") || isInNet(host, "192.168.0.0", "255.255.0.0")) {
+        return "DIRECT";
+      }
+      if (shExpMatch(host, "*.facebook.com") || host === "facebook.com" || shExpMatch(host, "*.fbcdn.net") || host === "fbcdn.net") {
+        return "PROXY ${cfg.host}:${cfg.port}";
+      }
+      return "DIRECT";
+    }
+  `;
+
+  try {
+    await chrome.proxy.settings.set({
+      value: {
+        mode: 'pac_script',
+        pacScript: { data: pac },
+      },
+      scope: 'regular',
+    });
+    await setStatus({ proxyActive: true, proxyHost: `${cfg.host}:${cfg.port}` });
+    console.log(`[Proxy] Active: ${cfg.host}:${cfg.port} (Facebook only)`);
+  } catch (e) {
+    console.warn('Proxy set error:', e);
+  }
+}
+
+// Proxy Authentication
+chrome.webRequest.onAuthRequired.addListener(
+  (details, callback) => {
+    if (details.isProxy && cachedProxy?.enabled && cachedProxy?.user) {
+      callback({
+        authCredentials: {
+          username: cachedProxy.user,
+          password: cachedProxy.pass,
+        },
+      });
+      return;
+    }
+    callback({});
+  },
+  { urls: ['<all_urls>'] },
+  ['asyncBlocking']
+);
+
+chrome.storage.local.get('activeProxy').then(({ activeProxy }) => {
+  if (activeProxy) syncProxy(activeProxy);
+}).catch(() => {});
+
+
 // ---------------- Ad Library collection ----------------
 // tabJobs: { [tabId]: job }  — Ad Library tabs that are collecting for a server job
 let collectBusy = false;
@@ -245,6 +327,7 @@ async function scraperLoop(slot) {
       const c = await getCfg();
       if (!c.enabled || !c.apiKey) break;
       const r = await api(`/worker/next-scrape?slot=${slot}`);
+      if (r.proxy) await syncProxy(r.proxy);
       // there is work: slot 0 wakes the other slots (a few seconds apart so the tabs don't hit
       // Facebook at the same moment); a slot that's already running ignores this
       if (r.lead && slot === 0) {
@@ -333,6 +416,7 @@ const handlers = {
     const cfg = { ...(await getCfg()), ...msg.cfg };
     await chrome.storage.local.set({ cfg });
     const stats = await api('/worker/status');
+    if (stats?.proxy) await syncProxy(stats.proxy);
     tick();
     return { ok: true, stats };
   },
@@ -357,6 +441,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   const workerTabs = await getSess('workerTabs', {});
   for (const [slot, id] of Object.entries(workerTabs)) if (id === tabId) delete workerTabs[slot];
   await setSess('workerTabs', workerTabs);
+  await updateBlockRules();
   const tabJobs = await getSess('tabJobs', {});
   if (tabJobs[tabId]) await finishJob(tabId, 'tab closed');
 });

@@ -17,11 +17,16 @@ export const DEFAULTS = {
   maxAds: 200,
   websiteFallback: true,
   closeAdTab: true,
+  proxyEnabled: false,
+  proxyHost: '',
+  proxyPort: 44445,
+  proxyUser: '',
+  proxyPass: '',
 };
 
-const NUMBER_KEYS = ['delayMin', 'delayMax', 'dailyLimit', 'maxAds', 'parallel'];
-const BOOL_KEYS = ['running', 'websiteFallback', 'closeAdTab', 'fullDetails'];
-const STRING_KEYS = ['pausedReason'];
+const NUMBER_KEYS = ['delayMin', 'delayMax', 'dailyLimit', 'maxAds', 'parallel', 'proxyPort'];
+const BOOL_KEYS = ['running', 'websiteFallback', 'closeAdTab', 'fullDetails', 'proxyEnabled'];
+const STRING_KEYS = ['pausedReason', 'proxyHost', 'proxyUser', 'proxyPass'];
 
 export async function getSettings() {
   const doc = await col('settings').findOne({ _id: 'main' });

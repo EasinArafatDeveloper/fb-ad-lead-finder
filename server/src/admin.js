@@ -1,3 +1,5 @@
+import http from 'node:http';
+import https from 'node:https';
 // Admin-only API (mounted at /api/admin behind requireAdmin): users and server logs.
 import express from 'express';
 import { col, httpError, log } from './db.js';
@@ -77,6 +79,65 @@ r.get('/logs', ah(() => col('logs').find({}).sort({ ts: -1 }).limit(300).toArray
 r.delete('/logs', ah(async () => {
   await col('logs').deleteMany({});
   return { ok: true };
+}));
+
+r.post('/test-proxy', ah(async (req) => {
+  const { host, port, user, pass } = req.body || {};
+  const proxyHost = String(host || '').trim();
+  const proxyPort = Number(port) || 44445;
+  const proxyUser = String(user || '').trim();
+  const proxyPass = String(pass || '').trim();
+
+  if (!proxyHost) throw httpError(400, 'Proxy host is required');
+
+  const auth = proxyUser ? Buffer.from(`${proxyUser}:${proxyPass}`).toString('base64') : '';
+  const CRLF = String.fromCharCode(13, 10);
+
+  return new Promise((resolve, reject) => {
+    const r = http.request({
+      host: proxyHost,
+      port: proxyPort,
+      method: 'CONNECT',
+      path: 'geo.brdtest.com:443',
+      headers: {
+        Host: 'geo.brdtest.com:443',
+        ...(auth ? { 'Proxy-Authorization': `Basic ${auth}` } : {}),
+      },
+    });
+
+    r.setTimeout(15000, () => {
+      r.destroy();
+      reject(httpError(504, 'Proxy connection timed out (15s)'));
+    });
+
+    r.on('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        return reject(httpError(502, `Proxy rejected with status ${res.statusCode}`));
+      }
+      const tls = https.connect({ socket, servername: 'geo.brdtest.com' }, () => {
+        tls.write(['GET /mygeo.json HTTP/1.1', 'Host: geo.brdtest.com', 'User-Agent: curl/8.0', 'Connection: close', '', ''].join(CRLF));
+      });
+
+      let data = '';
+      tls.on('data', (chunk) => { data += chunk; });
+      tls.on('end', () => {
+        try {
+          const sep = CRLF + CRLF;
+          const sepIdx = data.indexOf(sep);
+          const body = sepIdx >= 0 ? data.slice(sepIdx + sep.length) : data;
+          const json = JSON.parse(body);
+          resolve({ ok: true, ip: json.ip, country: json.country, city: json.city });
+        } catch {
+          resolve({ ok: true, message: 'Proxy connected successfully' });
+        }
+      });
+      tls.on('error', (e) => reject(httpError(502, `TLS error through proxy: ${e.message}`)));
+    });
+
+    r.on('error', (e) => reject(httpError(502, `Could not connect to proxy: ${e.message}`)));
+    r.end();
+  });
 }));
 
 export default r;

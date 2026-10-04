@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Copy, FileSpreadsheet, Gauge, Save, Settings as SettingsIcon, PlugZap, ArrowDownToLine, CloudUpload } from 'lucide-react';
+import { Copy, FileSpreadsheet, Gauge, Save, Settings as SettingsIcon, PlugZap, ArrowDownToLine, CloudUpload, ShieldCheck } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button, PageHeader, Skeleton } from '../components/ui';
 import { useStats } from '../components/Layout';
@@ -66,8 +66,33 @@ export default function Settings() {
   const setK = field(setWorker);
   const body = () => ({
     workspace: { sheetUrl: ws.sheetUrl, sheetSecret: ws.sheetSecret, autoSync: ws.autoSync },
-    ...(admin ? { worker: { delayMin: worker.delayMin, delayMax: worker.delayMax, dailyLimit: worker.dailyLimit, maxAds: worker.maxAds, parallel: worker.parallel, websiteFallback: worker.websiteFallback, closeAdTab: worker.closeAdTab } } : {}),
+    ...(admin ? { worker: {
+      delayMin: worker.delayMin, delayMax: worker.delayMax, dailyLimit: worker.dailyLimit, maxAds: worker.maxAds, parallel: worker.parallel,
+      websiteFallback: worker.websiteFallback, closeAdTab: worker.closeAdTab,
+      proxyEnabled: Boolean(worker.proxyEnabled), proxyHost: worker.proxyHost || '', proxyPort: Number(worker.proxyPort) || 44445,
+      proxyUser: worker.proxyUser || '', proxyPass: worker.proxyPass || ''
+    } } : {}),
   });
+  const testProxy = async () => {
+    setBusy('test-proxy');
+    try {
+      const res = await api('/admin/test-proxy', {
+        method: 'POST',
+        body: {
+          host: worker.proxyHost,
+          port: worker.proxyPort,
+          user: worker.proxyUser,
+          pass: worker.proxyPass,
+        },
+      });
+      toast.success(`Proxy working! Connected via IP: ${res.ip || 'OK'} (${res.country || 'Global'})`);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
   const save = async () => {
     setBusy('save');
     try {
@@ -160,6 +185,33 @@ export default function Settings() {
             <div className="mt-4 divide-y divide-slate-100 dark:divide-white/10">
               <Toggle id="wf" checked={worker.websiteFallback} onChange={setK('websiteFallback')} label="Find email on the website" help="If the page has no email, check their website's contact page" />
               <Toggle id="ct" checked={worker.closeAdTab} onChange={setK('closeAdTab')} label="Close the Ad Library tab after collecting" />
+            </div>
+          </Section>
+        )}
+
+        {admin && worker && (
+          <Section icon={ShieldCheck} title="Rotating Proxy (Bright Data / ISP)" text="Routes Facebook scraping through rotating residential IPs to prevent login walls">
+            <Toggle id="pe" checked={worker.proxyEnabled} onChange={setK('proxyEnabled')} label="Enable Proxy for Facebook scraping" help="Only Facebook traffic is routed through the proxy. Localhost and other sites stay direct." />
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="ph" className="label">Proxy Host</label>
+                <input id="ph" className="input" placeholder="brd.superproxy.io" value={worker.proxyHost || ''} onChange={setK('proxyHost')} />
+              </div>
+              <div>
+                <label htmlFor="pp" className="label">Proxy Port</label>
+                <input id="pp" type="number" className="input" placeholder="44445" value={worker.proxyPort || 44445} onChange={setK('proxyPort')} />
+              </div>
+              <div>
+                <label htmlFor="pu" className="label">Username</label>
+                <input id="pu" className="input" placeholder="brd-customer-..." value={worker.proxyUser || ''} onChange={setK('proxyUser')} />
+              </div>
+              <div>
+                <label htmlFor="pw" className="label">Password</label>
+                <input id="pw" type="password" className="input" placeholder="Password" value={worker.proxyPass || ''} onChange={setK('proxyPass')} />
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <Button size="sm" loading={busy === 'test-proxy'} onClick={testProxy}><PlugZap className="h-3.5 w-3.5" /> Test Proxy Connection</Button>
             </div>
           </Section>
         )}

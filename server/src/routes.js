@@ -252,7 +252,7 @@ r.post('/jobs/:id/requeue', ah(async (req) => {
 }));
 
 // ---------------- settings ----------------
-const workerPublic = (s) => ({ running: s.running, pausedReason: s.pausedReason, dailyLimit: s.dailyLimit, maxAds: s.maxAds, cooldownUntil: activeCooldown(s) });
+const workerPublic = (s) => ({ running: s.running, pausedReason: s.pausedReason, dailyLimit: s.dailyLimit, maxAds: s.maxAds, cooldownUntil: activeCooldown(s), proxyEnabled: Boolean(s.proxyEnabled) });
 
 r.get('/settings', ah(async (req) => {
   const s = await getSettings();
