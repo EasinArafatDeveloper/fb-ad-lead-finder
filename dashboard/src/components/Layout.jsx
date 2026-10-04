@@ -185,7 +185,8 @@ function RunnerPill() {
     }
   };
 
-  const doing = stats.collecting ? 'collecting ads' : stats.pending ? 'reading pages' : 'starting';
+  const waitUntil = stats.cooldownUntil ? new Date(stats.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  const doing = stats.collecting ? 'collecting ads' : waitUntil ? `break until ${waitUntil}` : stats.pending ? 'reading pages' : 'starting';
   return (
     <>
       <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-2">

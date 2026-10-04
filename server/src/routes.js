@@ -18,6 +18,8 @@ const STATUSES = ['New', 'Contacted', 'Interested', 'Not Interested', 'Closed'];
 const jobDTO = (j) => ({ ...j, id: String(j._id), _id: undefined, workspaceId: undefined, userId: undefined, pageIds: undefined, pageCount: (j.pageIds || []).length });
 const withContact = { $or: [{ 'emails.0': { $exists: true } }, { 'phones.0': { $exists: true } }, { 'whatsapp.0': { $exists: true } }] };
 const visitsToday = () => col('pages').countDocuments({ lastAttemptAt: { $gte: startOfToday() } });
+/** When the worker is taking a break after a Facebook login wall: the time it continues, else null. */
+const activeCooldown = (s) => (s.cooldownUntil && new Date(s.cooldownUntil) > new Date() ? s.cooldownUntil : null);
 
 /** Daily search limit per workspace (admins have none). */
 export async function checkSearchQuota(req, n) {
@@ -63,6 +65,7 @@ r.get('/stats', ah(async (req) => {
     // the shared worker: one daily page limit for the whole server
     workerVisitsToday: visits,
     running: settings.running, pausedReason: settings.pausedReason, dailyLimit: settings.dailyLimit,
+    cooldownUntil: activeCooldown(settings),
     lastSyncAt: (await getWsSettings(ws)).lastSyncAt || null,
   };
 }));
@@ -249,7 +252,7 @@ r.post('/jobs/:id/requeue', ah(async (req) => {
 }));
 
 // ---------------- settings ----------------
-const workerPublic = (s) => ({ running: s.running, pausedReason: s.pausedReason, dailyLimit: s.dailyLimit, maxAds: s.maxAds });
+const workerPublic = (s) => ({ running: s.running, pausedReason: s.pausedReason, dailyLimit: s.dailyLimit, maxAds: s.maxAds, cooldownUntil: activeCooldown(s) });
 
 r.get('/settings', ah(async (req) => {
   const s = await getSettings();
@@ -316,6 +319,7 @@ r.get('/pipeline', ah(async (req) => {
   return {
     running: s.running,
     pausedReason: s.pausedReason,
+    cooldownUntil: activeCooldown(s),
     collecting: collecting ? { keyword: collecting.keyword, ads: collecting.adsSeen || 0, pages: (collecting.pageIds || []).length, maxAds: collecting.maxAds } : null,
     working: working ? { name: working.pageName || working.pageId } : null,
     queued: queuedJobs.map((j) => ({ keyword: j.keyword, country: j.country })),

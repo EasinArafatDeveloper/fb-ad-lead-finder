@@ -261,16 +261,22 @@ async function scraperLoop(slot) {
       } catch (e) {
         res = { error: String(e.message || e) };
       }
-      if (res.blocked || res.loggedOut) {
-        const reason = res.loggedOut ? 'Not logged in to Facebook' : 'Facebook checkpoint / temporary block';
+      if (res.loggedOut) {
+        // Facebook's login wall: the server decides how long to wait, then the worker continues by itself
+        const w = await api('/worker/wall', { method: 'POST', body: { pageId: r.lead.pageId } });
+        await setStatus({ scraper: `waiting (login wall) until ${w.until ? new Date(w.until).toLocaleTimeString() : 'later'}`, error: '' });
+        break;
+      }
+      if (res.blocked) {
+        const reason = 'Facebook checkpoint / temporary block';
         await api('/worker/blocked', { method: 'POST', body: { pageId: r.lead.pageId, reason } });
         await setStatus({ scraper: 'paused', error: reason });
-        notify('FB Lead Finder paused', reason + ' — fix it, then press Resume in the dashboard.');
+        notify('FB Lead Finder paused', reason + ' — check Facebook in this browser, then press Resume in the dashboard.');
         break;
       }
       await api('/worker/result', { method: 'POST', body: { pageId: r.lead.pageId, result: res } });
-      const min = Number(r.delayMin) || 4;
-      const max = Math.max(min, Number(r.delayMax) || 8);
+      const min = Number(r.delayMin) || 15;
+      const max = Math.max(min, Number(r.delayMax) || 30);
       await sleepAlive((min + Math.random() * (max - min)) * 1000);
     }
   } catch (e) {

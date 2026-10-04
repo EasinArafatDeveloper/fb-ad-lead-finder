@@ -4,9 +4,14 @@ import { col, httpError } from './db.js';
 export const DEFAULTS = {
   running: true,
   pausedReason: '',
-  delayMin: 4,
-  delayMax: 8,
-  parallel: 2, // how many pages are read at the same time (worker tabs)
+  // Pages are read without a Facebook login. Facebook shows a login wall when one IP opens pages fast
+  // (measured: 26 pages in 2 minutes), so the default pace is slow and steady.
+  delayMin: 15,
+  delayMax: 30,
+  parallel: 1, // how many pages are read at the same time (worker tabs)
+  // login wall → wait, then continue by itself (see worker.js /wall)
+  cooldownUntil: null,
+  cooldownMin: 0,
   fullDetails: false,
   dailyLimit: 150,
   maxAds: 200,
@@ -30,7 +35,11 @@ export async function updateSettings(patch = {}) {
   for (const k of NUMBER_KEYS) if (k in patch) set[k] = Math.max(0, Number(patch[k]) || 0);
   for (const k of BOOL_KEYS) if (k in patch) set[k] = Boolean(patch[k]);
   for (const k of STRING_KEYS) if (k in patch) set[k] = String(patch[k] ?? '').trim().slice(0, 300);
-  if ('running' in set && set.running) set.pausedReason = '';
+  if ('running' in set && set.running) {
+    // Resume = start now (also ends a login-wall wait)
+    set.pausedReason = '';
+    set.cooldownUntil = null;
+  }
   if ('parallel' in set) set.parallel = Math.min(3, Math.max(1, Math.round(set.parallel) || 1));
   if ('delayMin' in set) set.delayMin = Math.max(1, set.delayMin);
   if ('maxAds' in set) set.maxAds = Math.min(5000, Math.max(10, set.maxAds));

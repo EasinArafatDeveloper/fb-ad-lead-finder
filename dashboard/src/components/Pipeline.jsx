@@ -149,6 +149,10 @@ export function NowLine({ data }) {
   if (!data.running) {
     text = `Paused${data.pausedReason ? ` — ${data.pausedReason}` : ''}. Press Resume at the top to continue.`;
     tone = 'amber';
+  } else if (data.cooldownUntil && !data.collecting) {
+    const at = new Date(data.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    text = `Facebook asked for a login, so the worker is taking a break — it continues by itself at ${at}. Nothing to do.`;
+    tone = 'amber';
   } else if (data.collecting) text = `Collecting ads for "${data.collecting.keyword}" in the Ad Library — ${data.collecting.ads} ads, ${data.collecting.pages} pages so far`;
   else if (data.working) text = `Reading the page "${data.working.name}"`;
   else if (data.pendingAll && data.doneToday >= data.dailyLimit) {

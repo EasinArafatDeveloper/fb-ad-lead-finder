@@ -135,9 +135,9 @@ export default function Settings() {
               <span className="label">Pages read at the same time</span>
               <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Parallel tabs">
                 {[
-                  [1, 'Slow, safest'],
-                  [2, 'Fast · recommended'],
-                  [3, 'Fastest, higher risk'],
+                  [1, 'Recommended (no login)'],
+                  [2, 'Faster, more login walls'],
+                  [3, 'Fastest, most walls'],
                 ].map(([n, hint]) => (
                   <button
                     key={n}

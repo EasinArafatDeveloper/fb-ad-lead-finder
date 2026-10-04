@@ -124,6 +124,9 @@ r.get('/next-scrape', ah(async (req) => {
   const s = await getSettings();
   if (!s.running) return { lead: null, reason: s.pausedReason || 'paused', parallel: s.parallel };
   if (Number(req.query.slot) >= s.parallel) return { lead: null, reason: 'slot-off', parallel: s.parallel };
+  if (s.cooldownUntil && new Date(s.cooldownUntil) > new Date()) {
+    return { lead: null, reason: `waiting until ${fmtTime(s.cooldownUntil)} (Facebook login wall)`, parallel: s.parallel };
+  }
   const doneToday = await visitsToday();
   if (doneToday >= s.dailyLimit) return { lead: null, reason: 'daily-limit', doneToday, parallel: s.parallel };
   const stale = await col('pages').find({ scrapeStatus: 'working', claimedAt: { $lt: new Date(Date.now() - STALE_WORK_MS) } }).project({ pageId: 1 }).toArray();
@@ -147,6 +150,8 @@ r.get('/next-scrape', ah(async (req) => {
 r.post('/result', ah(async (req) => {
   const { pageId, result } = req.body || {};
   await applyResult(String(pageId), result || {});
+  // a page read fine → the next login wall starts again with the shortest wait
+  if (!result?.error) await col('settings').updateOne({ _id: 'main', cooldownMin: { $gt: 0 } }, { $set: { cooldownMin: 0 } });
   const p = await col('pages').findOne({ pageId: String(pageId) }, { projection: { pageName: 1, phones: 1, emails: 1, whatsapp: 1, scrapeStatus: 1, lastError: 1 } });
   if (p) {
     const found = [p.phones?.length && `${p.phones.length} phone`, p.whatsapp?.length && 'WhatsApp', p.emails?.length && `${p.emails.length} email`].filter(Boolean);
@@ -155,6 +160,41 @@ r.post('/result', ah(async (req) => {
     else if (p.scrapeStatus === 'failed') await pageActivity(p.pageId, 'failed', `${name} — could not be read after 3 tries (${p.lastError})`);
   }
   return { ok: true };
+}));
+
+const FIRST_WAIT_MIN = 30;
+const MAX_WAIT_MIN = 240;
+const PAGE_WALLS_BEFORE_SKIP = 3;
+const fmtTime = (d) => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Facebook showed its login wall instead of the page (it does that when one IP opens pages quickly without
+ * logging in). We don't push through it: the worker waits — 30 min, then 60, 120, up to 4 h if it keeps
+ * happening — and continues by itself. A page that keeps asking for a login on its own is skipped.
+ */
+r.post('/wall', ah(async (req) => {
+  const pageId = String(req.body?.pageId || '');
+  if (pageId) {
+    const p = await col('pages').findOneAndUpdate(
+      { pageId },
+      { $set: { scrapeStatus: 'pending', updatedAt: new Date() }, $inc: { loginWalls: 1 } },
+      { returnDocument: 'after' },
+    );
+    if (p && p.loginWalls >= PAGE_WALLS_BEFORE_SKIP) {
+      await col('pages').updateOne({ pageId }, { $set: { scrapeStatus: 'failed', lastError: 'Facebook asks to log in for this page' } });
+      await pageActivity(pageId, 'failed', `${p.pageName || pageId} — Facebook only shows this page after login, skipped`);
+    }
+    await syncLeads([pageId]);
+  }
+  const s = await getSettings();
+  if (s.cooldownUntil && new Date(s.cooldownUntil) > new Date()) return { ok: true, until: s.cooldownUntil }; // already waiting
+  const wait = Math.min(MAX_WAIT_MIN, s.cooldownMin ? s.cooldownMin * 2 : FIRST_WAIT_MIN);
+  const until = new Date(Date.now() + wait * 60e3);
+  await col('settings').updateOne({ _id: 'main' }, { $set: { cooldownUntil: until, cooldownMin: wait } }, { upsert: true });
+  const pagesBefore = await col('pages').countDocuments({ lastAttemptAt: { $gte: new Date(Date.now() - 60 * 60e3) } });
+  await log('warn', `Login wall after ${pagesBefore} pages in the last hour — waiting ${wait} min (until ${fmtTime(until)})`);
+  await activity('paused', `Facebook asked for a login — taking a ${wait} min break, continuing by itself at ${fmtTime(until)}`);
+  return { ok: true, until };
 }));
 
 r.post('/blocked', ah(async (req) => {
