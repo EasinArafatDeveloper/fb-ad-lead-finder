@@ -13,20 +13,28 @@ const LEVEL = {
 
 export default function Logs() {
   const [logs, setLogs] = useState(null);
-  const load = () => api('/logs').then(setLogs).catch((e) => toast.error(e.message));
+  const load = () => api('/admin/logs').then(setLogs).catch((e) => toast.error(e.message));
   useEffect(() => {
     load();
   }, []);
+  const clear = async () => {
+    try {
+      await api('/admin/logs', { method: 'DELETE' });
+      load();
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
   return (
     <div>
       <PageHeader
         icon={ScrollText}
-        title="Logs"
-        subtitle="History of errors, pauses and syncs"
+        title="Server logs"
+        subtitle="Errors, pauses and syncs from the whole server (admins only)"
         actions={
           <>
             <Button onClick={load}><RefreshCw className="h-4 w-4" /> Refresh</Button>
-            <Button variant="ghost" className="text-rose-600 hover:bg-rose-50" onClick={async () => { await api('/logs', { method: 'DELETE' }); load(); }}>
+            <Button variant="ghost" className="text-rose-600 hover:bg-rose-50" onClick={clear}>
               <Trash2 className="h-4 w-4" /> Clear
             </Button>
           </>

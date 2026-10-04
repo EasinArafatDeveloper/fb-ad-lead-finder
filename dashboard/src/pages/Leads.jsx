@@ -366,6 +366,7 @@ export default function Leads() {
                       </td>
                       <td className="px-3 py-3">
                         <select
+                          key={`st-${l.status}`}
                           aria-label="Status"
                           defaultValue={l.status}
                           onChange={(e) => patch(l, { status: e.target.value }, 'Status saved')}
@@ -382,6 +383,7 @@ export default function Leads() {
                       </td>
                       <td className="px-3 py-3">
                         <textarea
+                          key={`nt-${l.notes || ''}`}
                           aria-label="Notes"
                           rows={1}
                           defaultValue={l.notes}

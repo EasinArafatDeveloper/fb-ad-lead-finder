@@ -315,9 +315,13 @@ export default function Explorer() {
     else load(true);
   };
   const collectMore = async (project) => {
-    await api(`/projects/${project.id}/search`, { method: 'POST', body: {} });
-    toast.success(`"${project.name}" queued to search again`, { description: 'The extension opens the Ad Library within a minute.' });
-    load(true);
+    try {
+      await api(`/projects/${project.id}/search`, { method: 'POST', body: {} });
+      toast.success(`"${project.name}" queued to search again`, { description: 'The worker opens the Ad Library within a minute.' });
+      load(true);
+    } catch (e) {
+      toast.error(e.message);
+    }
   };
 
   const itemActions = (item) => [

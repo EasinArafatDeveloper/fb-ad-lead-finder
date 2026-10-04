@@ -4,7 +4,7 @@ import { Workbook } from '@fortune-sheet/react';
 import '@fortune-sheet/react/dist/index.css';
 import { toast } from 'sonner';
 import { ArrowLeft, Check, ChevronRight, CloudUpload, Download, Loader2, RefreshCw, Zap } from 'lucide-react';
-import { api, download, getKey } from '../lib/api';
+import { api, download } from '../lib/api';
 import { cn, formatNumber } from '../lib/utils';
 import { Button, Skeleton } from '../components/ui';
 import { SheetIcon } from '../components/FileIcons';
@@ -82,7 +82,8 @@ export default function SheetView() {
       fetch(`/api/sheets/${sid}`, {
         method: 'PUT',
         keepalive: true,
-        headers: { 'content-type': 'application/json', 'x-api-key': getKey() },
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sheets: toSaved(pending.current) }),
       });
     };

@@ -8,10 +8,11 @@ const SECRET = 'change-this-secret';
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents);
+    if (SECRET === 'change-this-secret') return out({ ok: false, error: 'Change SECRET in the Apps Script code first (it is still the default)' });
     if (body.secret !== SECRET) return out({ ok: false, error: 'Wrong secret key' });
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (body.action === 'ping') return out({ ok: true, sheet: ss.getName() });
-    if (body.action === 'upsert') return out(Object.assign({ ok: true }, upsert(ss, body.sheet, body.key, body.headers, body.rows)));
+    if (body.action === 'upsert') return out(Object.assign({ ok: true }, upsert(ss, body.sheet, body.key, body.headers, body.rows, body.keep || [])));
     if (body.action === 'pull') return out({ ok: true, rows: pull(ss, body.sheet, body.fields) });
     return out({ ok: false, error: 'Unknown action' });
   } catch (err) {
@@ -27,8 +28,11 @@ function out(o) {
   return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
 }
 
-/** Upsert by the key column: update the row if it exists, else append a new one. Your own extra columns are left alone. */
-function upsert(ss, name, key, headers, rows) {
+/**
+ * Upsert by the key column: update the row if it exists, else append a new one. Your own extra columns are left alone,
+ * and the `keep` columns (Status, Notes — what your team types) are only filled when the cell is still empty.
+ */
+function upsert(ss, name, key, headers, rows, keep) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -51,18 +55,27 @@ function upsert(ss, name, key, headers, rows) {
 
     let updated = 0;
     const appends = [];
+    const keepIdx = headers.map(function (h) { return keep.indexOf(h) !== -1; });
+    const appendedAt = {};
     rows.forEach(function (r) {
       const k = String(r[keyIdx]);
       let target;
-      if (index[k] !== undefined && index[k] >= 0) {
+      let existing = false;
+      if (index[k] !== undefined) {
         target = data[index[k]];
+        existing = true;
         updated++;
+      } else if (appendedAt[k] !== undefined) {
+        target = appends[appendedAt[k]];
       } else {
         target = new Array(cur.length).fill('');
+        appendedAt[k] = appends.length;
         appends.push(target);
-        index[k] = -1;
       }
-      colMap.forEach(function (c, i) { target[c] = r[i] == null ? '' : String(r[i]); });
+      colMap.forEach(function (c, i) {
+        if (existing && keepIdx[i] && String(target[c]) !== '') return; // the team's edit wins
+        target[c] = r[i] == null ? '' : String(r[i]);
+      });
     });
     if (data.length && updated) sh.getRange(2, 1, data.length, cur.length).setValues(data);
     if (appends.length) {

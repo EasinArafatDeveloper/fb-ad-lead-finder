@@ -7,16 +7,23 @@ function showMsg(text, kind = '') {
 }
 
 function renderStats(s) {
-  $('stats').innerHTML = [
-    ['Leads', s.total],
-    ['Email', s.withEmail],
-    ['Phone', s.withPhone],
+  const stats = [
+    ['Pages', s.pages],
     ['Queue', s.pending],
-    ['Today', `${s.scrapedToday}/${s.dailyLimit}`],
-    ['Jobs', s.queuedJobs + s.collecting],
-  ]
-    .map(([k, v]) => `<div><b>${v ?? '–'}</b><span>${k}</span></div>`)
-    .join('');
+    ['Today', `${s.doneToday}/${s.dailyLimit}`],
+    ['Searches', s.queuedJobs + s.collecting],
+  ];
+  $('stats').replaceChildren(
+    ...stats.map(([k, v]) => {
+      const d = document.createElement('div');
+      const b = document.createElement('b');
+      const span = document.createElement('span');
+      b.textContent = v ?? '–';
+      span.textContent = k;
+      d.append(b, span);
+      return d;
+    }),
+  );
   $('dot').className = 'dot ' + (s.running ? 'ok' : 'paused');
 }
 
@@ -39,7 +46,7 @@ async function refresh() {
 }
 
 $('save').onclick = async () => {
-  let serverUrl = ($('serverUrl').value.trim() || 'http://localhost:4000').replace(/\/+$/, '');
+  let serverUrl = ($('serverUrl').value.trim() || 'http://localhost:3002').replace(/\/+$/, '');
   if (!/^https?:\/\//.test(serverUrl)) serverUrl = 'https://' + serverUrl;
   // The extension only has access to Facebook, localhost and *.vercel.app by default.
   // A server on any other address (e.g. your own domain) needs a one-time permission.
@@ -63,7 +70,7 @@ $('save').onclick = async () => {
 };
 
 $('open').onclick = async () => {
-  const url = ($('serverUrl').value.trim() || 'http://localhost:4000').replace(/\/+$/, '');
+  const url = ($('serverUrl').value.trim() || 'http://localhost:3002').replace(/\/+$/, '');
   chrome.tabs.create({ url: url + '/' });
 };
 

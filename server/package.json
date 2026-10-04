@@ -1,17 +1,18 @@
 {
   "name": "fb-ad-lead-server",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --env-file=../.env --watch src/index.js",
+    "test": "node --test test/"
   },
   "dependencies": {
-    "@vercel/functions": "^3.9.9",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "mongodb": "^6.12.0"

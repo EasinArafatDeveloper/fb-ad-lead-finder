@@ -1,0 +1,7 @@
+**/node_modules
+dashboard/dist
+.git
+.env
+*.env
+*.log
+ADMIN_LOGIN.txt

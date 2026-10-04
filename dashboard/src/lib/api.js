@@ -1,41 +1,32 @@
-const KEY_NAME = 'fblf_key';
-
-export const getKey = () => {
-  try {
-    return localStorage.getItem(KEY_NAME) || '';
-  } catch {
-    return '';
-  }
-};
-export const setKey = (k) => {
-  try {
-    k ? localStorage.setItem(KEY_NAME, k) : localStorage.removeItem(KEY_NAME);
-  } catch {
-    /* storage blocked */
-  }
-};
-
+// Talks to the server. The login is an httpOnly session cookie, sent automatically with every request.
 export class AuthError extends Error {}
 
-export async function api(path, { method = 'GET', body } = {}) {
+async function call(path, { method = 'GET', body } = {}) {
   const r = await fetch('/api' + path, {
     method,
-    headers: { 'content-type': 'application/json', 'x-api-key': getKey() },
+    credentials: 'same-origin',
+    headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (r.status === 401) {
+  return r;
+}
+
+export async function api(path, opts) {
+  const r = await call(path, opts);
+  if (r.status === 401 && !path.startsWith('/auth/')) {
     window.dispatchEvent(new Event('fblf:logout'));
-    throw new AuthError('Wrong API key');
+    throw new AuthError('Please log in again');
   }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
   return j;
 }
 
-/** Download a file from the API (the key goes in a header, so a plain link won't do). */
+/** Download a file from the API and save it with this name. */
 export async function download(path, filename) {
-  const r = await fetch('/api' + path, { headers: { 'x-api-key': getKey() } });
-  if (!r.ok) throw new Error('Download failed');
+  const r = await call(path);
+  if (r.status === 401) window.dispatchEvent(new Event('fblf:logout'));
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Download failed');
   const blob = await r.blob();
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

@@ -1,7 +1,7 @@
 // Background worker: takes jobs from the server, opens Ad Library tabs, scrapes Page About tabs,
 // and sends everything back to the server. All data lives in MongoDB (via the server).
 
-const DEFAULT_CFG = { serverUrl: 'http://localhost:4000', apiKey: '', enabled: true };
+const DEFAULT_CFG = { serverUrl: 'http://localhost:3002', apiKey: '', enabled: true };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function getCfg() {
@@ -18,7 +18,7 @@ async function setStatus(patch) {
 
 async function api(path, { method = 'GET', body } = {}) {
   const c = await getCfg();
-  if (!c.apiKey) throw new Error('API key is not set (extension popup)');
+  if (!c.apiKey) throw new Error('Worker key is not set (extension popup)');
   const r = await fetch(c.serverUrl.replace(/\/+$/, '') + '/api' + path, {
     method,
     headers: { 'content-type': 'application/json', 'x-api-key': c.apiKey, 'x-ext-version': chrome.runtime.getManifest().version },
@@ -326,11 +326,11 @@ const handlers = {
   'popup:saveCfg': async (msg) => {
     const cfg = { ...(await getCfg()), ...msg.cfg };
     await chrome.storage.local.set({ cfg });
-    const stats = await api('/stats');
+    const stats = await api('/worker/status');
     tick();
     return { ok: true, stats };
   },
-  'popup:stats': async () => api('/stats'),
+  'popup:stats': async () => api('/worker/status'),
   'popup:kick': async () => {
     tick();
     return { ok: true };

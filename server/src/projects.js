@@ -1,6 +1,6 @@
-// Projects (one per keyword search) → folders → sheets (Google-Sheets-like workbooks, FortuneSheet format).
+// Projects (one per keyword search, per workspace) → folders → sheets (Google-Sheets-like workbooks, FortuneSheet format).
 import { ObjectId } from 'mongodb';
-import { col, log } from './db.js';
+import { col } from './db.js';
 import { adLink, fmtDate, pageAdsLink, pageLink } from './util.js';
 
 export const oid = (id) => {
@@ -24,12 +24,14 @@ const TEMPLATE = [
   { type: 'folder', name: 'Ads', children: [{ type: 'sheet', name: 'All Ads', kind: 'ads', filter: 'all' }] },
 ];
 
-async function createTemplate(projectId) {
+async function createTemplate(ws, projectId) {
   const now = Date.now();
   let i = 0;
   const walk = async (nodes, parentId) => {
     for (const n of nodes) {
-      const doc = { projectId, parentId, type: n.type, name: n.name, kind: n.kind || 'custom', filter: n.filter || null, auto: true, createdAt: new Date(now + i++) };
+      const doc = {
+        workspaceId: ws, projectId, parentId, type: n.type, name: n.name, kind: n.kind || 'custom', filter: n.filter || null, auto: true, createdAt: new Date(now + i++),
+      };
       const { insertedId } = await col('items').insertOne(doc);
       if (n.children) await walk(n.children, insertedId);
     }
@@ -37,65 +39,83 @@ async function createTemplate(projectId) {
   await walk(TEMPLATE, null);
 }
 
-/** Find the project for a keyword+country, or create it (with the default Leads/Ads folders). */
-export async function ensureProject(keyword, country) {
+/** Find the workspace's project for a keyword+country, or create it (with the default Leads/Ads folders). */
+export async function ensureProject(ws, keyword, country) {
   const key = `${String(keyword).trim().toLowerCase()}|${String(country || 'ALL').toUpperCase()}`;
-  const existing = await col('projects').findOne({ key });
+  const existing = await col('projects').findOne({ workspaceId: ws, key });
   if (existing) return existing._id;
-  const doc = { key, name: String(keyword).trim(), keyword: String(keyword).trim(), country: String(country || 'ALL').toUpperCase(), createdAt: new Date() };
-  const { insertedId } = await col('projects').insertOne(doc);
-  await createTemplate(insertedId);
-  return insertedId;
-}
-
-/** One-time: give older jobs/leads/ads a project. Safe to run on every start. */
-export async function migrateProjects() {
-  const jobs = await col('jobs').find({ projectId: { $exists: false } }).toArray();
-  for (const j of jobs) {
-    const pid = await ensureProject(j.keyword, j.country);
-    const jid = String(j._id);
-    await col('jobs').updateOne({ _id: j._id }, { $set: { projectId: pid } });
-    await col('leads').updateMany({ jobIds: jid }, { $addToSet: { projectIds: pid } });
-    await col('ads').updateMany({ jobId: jid }, { $set: { projectId: pid } });
+  const doc = { workspaceId: ws, key, name: String(keyword).trim(), keyword: String(keyword).trim(), country: String(country || 'ALL').toUpperCase(), createdAt: new Date() };
+  try {
+    const { insertedId } = await col('projects').insertOne(doc);
+    await createTemplate(ws, insertedId);
+    return insertedId;
+  } catch (e) {
+    if (e.code === 11000) return (await col('projects').findOne({ workspaceId: ws, key }))._id; // created at the same moment
+    throw e;
   }
-  if (jobs.length) await log('info', `Migrated ${jobs.length} old job(s) into projects`);
-  await col('items').createIndex({ projectId: 1, parentId: 1 });
-  await col('leads').createIndex({ projectIds: 1 });
-  await col('ads').createIndex({ projectId: 1 });
-  await col('projects').createIndex({ key: 1 }, { unique: true });
 }
 
 // ---------------- data behind the auto sheets ----------------
 const CONTACT = { $or: [{ 'emails.0': { $exists: true } }, { 'phones.0': { $exists: true } }, { 'whatsapp.0': { $exists: true } }] };
 
-export function leadFilter(projectId, filter) {
-  const f = { projectIds: projectId };
-  if (filter === 'contact') Object.assign(f, CONTACT);
-  if (filter === 'email') f['emails.0'] = { $exists: true };
-  if (filter === 'nocontact') Object.assign(f, { scrapeStatus: 'done', 'emails.0': { $exists: false }, 'phones.0': { $exists: false }, 'whatsapp.0': { $exists: false } });
+export function leadFilter(item) {
+  const f = { workspaceId: item.workspaceId, projectIds: item.projectId };
+  if (item.filter === 'contact') Object.assign(f, CONTACT);
+  if (item.filter === 'email') f['emails.0'] = { $exists: true };
+  if (item.filter === 'nocontact') Object.assign(f, { scrapeStatus: 'done', 'emails.0': { $exists: false }, 'phones.0': { $exists: false }, 'whatsapp.0': { $exists: false } });
   return f;
 }
 
 export async function itemCount(item) {
   if (item.type === 'folder') return col('items').countDocuments({ parentId: item._id });
-  if (item.kind === 'leads') return col('leads').countDocuments(leadFilter(item.projectId, item.filter));
-  if (item.kind === 'ads') return col('ads').countDocuments({ projectId: item.projectId });
+  if (item.kind === 'leads') return col('leads').countDocuments(leadFilter(item));
+  if (item.kind === 'ads') return col('ads').countDocuments({ projectIds: item.projectId });
   const s = await col('sheets').findOne({ _id: item._id }, { projection: { rowCount: 1 } });
   return s?.rowCount || 0;
 }
 
 export async function projectStats(p) {
   const pid = p._id;
+  const ws = p.workspaceId;
   const [leads, withContact, pending, stopped, ads, jobs] = await Promise.all([
-    col('leads').countDocuments({ projectIds: pid }),
-    col('leads').countDocuments({ projectIds: pid, ...CONTACT }),
-    col('leads').countDocuments({ projectIds: pid, scrapeStatus: { $in: ['pending', 'working'] } }),
-    col('leads').countDocuments({ projectIds: pid, scrapeStatus: 'stopped' }),
-    col('ads').countDocuments({ projectId: pid }),
+    col('leads').countDocuments({ workspaceId: ws, projectIds: pid }),
+    col('leads').countDocuments({ workspaceId: ws, projectIds: pid, ...CONTACT }),
+    col('leads').countDocuments({ workspaceId: ws, projectIds: pid, scrapeStatus: { $in: ['pending', 'working'] } }),
+    col('leads').countDocuments({ workspaceId: ws, projectIds: pid, scrapeStatus: 'stopped' }),
+    col('ads').countDocuments({ projectIds: pid }),
     col('jobs').find({ projectId: pid }).project({ phase: 1, createdAt: 1, adsSeen: 1 }).sort({ createdAt: -1 }).toArray(),
   ]);
   const phase = jobs.some((j) => j.phase === 'collecting') ? 'collecting' : jobs.some((j) => j.phase === 'queued') ? 'queued' : pending ? 'scraping' : 'done';
   return { leads, withContact, pending, stopped, ads, runs: jobs.length, phase: stopped && phase === 'done' ? 'stopped' : phase, lastRunAt: jobs[0]?.createdAt || p.createdAt };
+}
+
+// ---------------- stop / continue reading pages ----------------
+/** A workspace no longer wants these pages read. Pages nobody else wants are taken out of the queue. */
+export async function stopPages(ws, leadFilterExtra = {}) {
+  const now = new Date();
+  const pageIds = await col('leads').distinct('pageId', { workspaceId: ws, scrapeStatus: { $in: ['pending', 'working'] }, ...leadFilterExtra });
+  if (!pageIds.length) return 0;
+  await col('leads').updateMany({ workspaceId: ws, pageId: { $in: pageIds } }, { $set: { scrapeStatus: 'stopped', updatedAt: now } });
+  await col('pages').updateMany({ pageId: { $in: pageIds } }, { $pull: { wantedBy: ws } });
+  await col('pages').updateMany(
+    { pageId: { $in: pageIds }, scrapeStatus: 'pending', $or: [{ wantedBy: { $size: 0 } }, { wantedBy: { $exists: false } }] },
+    { $set: { scrapeStatus: 'stopped', updatedAt: now } },
+  );
+  return pageIds.length;
+}
+
+/** Queue pages again for a workspace (Continue / Re-scrape). */
+export async function queuePages(ws, pageIds, { force = false } = {}) {
+  if (!pageIds.length) return 0;
+  const now = new Date();
+  const statuses = force ? ['stopped', 'done', 'failed'] : ['stopped'];
+  await col('pages').updateMany(
+    { pageId: { $in: pageIds }, scrapeStatus: { $in: statuses } },
+    { $set: { scrapeStatus: 'pending', retries: 0, lastError: '', updatedAt: now } },
+  );
+  await col('pages').updateMany({ pageId: { $in: pageIds } }, { $addToSet: { wantedBy: ws } });
+  await col('leads').updateMany({ workspaceId: ws, pageId: { $in: pageIds }, scrapeStatus: { $in: statuses } }, { $set: { scrapeStatus: 'pending', updatedAt: now } });
+  return pageIds.length;
 }
 
 // ---------------- sheet columns ----------------
@@ -141,8 +161,8 @@ const textCell = (v) => (typeof v === 'number' ? { v, m: String(v), ff: 'Arial',
 const isEmpty = (cell) => !cell || cell.v === undefined || cell.v === null || cell.v === '';
 
 async function sourceRows(item) {
-  if (item.kind === 'ads') return col('ads').find({ projectId: item.projectId }).sort({ createdAt: 1 }).toArray();
-  return col('leads').find(leadFilter(item.projectId, item.filter)).sort({ createdAt: 1 }).toArray();
+  if (item.kind === 'ads') return col('ads').find({ projectIds: item.projectId }).sort({ createdAt: 1 }).toArray();
+  return col('leads').find(leadFilter(item)).sort({ createdAt: 1 }).toArray();
 }
 
 function blankSheet(item) {
@@ -218,10 +238,16 @@ export async function loadSheet(item) {
   return doc.sheets;
 }
 
+/** Rows that have at least one non-empty cell. */
+const filledRows = (sheet) => new Set((sheet?.celldata || []).filter((x) => x.r > 0 && !isEmpty(x.v)).map((x) => x.r));
+
 async function saveSheetDoc(item, sheets, removedKeys) {
   const live = sheets.find((s) => s.id === 'live') || sheets[0];
-  const rowCount = live ? new Set((live.celldata || []).filter((x) => x.r > 0).map((x) => x.r)).size : 0;
-  await col('sheets').updateOne({ _id: item._id }, { $set: { sheets, removedKeys, rowCount, updatedAt: new Date() } }, { upsert: true });
+  await col('sheets').updateOne(
+    { _id: item._id },
+    { $set: { workspaceId: item.workspaceId, sheets, removedKeys, rowCount: filledRows(live).size, updatedAt: new Date() } },
+    { upsert: true },
+  );
 }
 
 // A second column that is unique per row: if both the key AND this value are gone, the row was deleted
@@ -238,13 +264,14 @@ function valuesByRow(sheet, header) {
 }
 
 /**
- * Save what the user edited. A row the user deleted in a live sheet deletes that lead/ad
- * everywhere (MongoDB, every other sheet, exports). Rows are also tombstoned so they never come back.
+ * Save what the user edited. A row the user really deleted in a live sheet removes that lead (or ad) from
+ * this workspace. Only *deleted rows* count: clearing cells (selecting a range and pressing Delete) leaves
+ * the rows in place, so nothing is removed — the sheet must actually have fewer rows than before.
  */
 export async function saveSheet(item, sheets) {
   const prev = await col('sheets').findOne({ _id: item._id });
   let removedKeys = prev?.removedKeys || [];
-  let deleted = [];
+  const deleted = [];
   if (item.kind === 'leads' || item.kind === 'ads') {
     const { key } = colsFor(item.kind);
     const pick = (list) => (list || []).find((s) => s.id === 'live') || (list || [])[0];
@@ -252,27 +279,34 @@ export async function saveSheet(item, sheets) {
     const afterSheet = pick(sheets);
     const beforeKeys = valuesByRow(beforeSheet, key);
     const after = keysOf(afterSheet, key);
-    if (beforeKeys.size && after) {
+    // Deleting rows moves the rows below them up, so the last filled row moves up too. Clearing cells
+    // in the middle leaves an empty gap and the last row stays where it was.
+    const lastRow = (s) => [...filledRows(s)].reduce((a, b) => (b > a ? b : a), 0);
+    const rowsRemoved = Math.min(filledRows(beforeSheet).size - filledRows(afterSheet).size, lastRow(beforeSheet) - lastRow(afterSheet));
+    if (beforeKeys.size && after && rowsRemoved > 0) {
       const nowKeys = new Set(after);
       const beforeWitness = valuesByRow(beforeSheet, WITNESS[item.kind]);
       const nowWitness = new Set(valuesByRow(afterSheet, WITNESS[item.kind]).values());
+      const missing = [];
       for (const [r, k] of beforeKeys) {
         if (nowKeys.has(k)) continue;
         const w = beforeWitness.get(r);
-        if (!w || !nowWitness.has(w)) deleted.push(k); // whole row gone
+        if (!w || !nowWitness.has(w)) missing.push(k); // whole row gone
       }
+      // more keys missing than rows removed = cells were cleared, not rows deleted → delete nothing
+      if (missing.length <= rowsRemoved) deleted.push(...missing);
       removedKeys = [...new Set([...removedKeys, ...deleted])];
     }
   }
   await saveSheetDoc(item, sheets, removedKeys);
   if (deleted.length) {
-    if (item.kind === 'ads') await deleteAdsEverywhere(deleted);
-    else await deleteLeadsEverywhere(deleted, { skipSheet: item._id });
+    if (item.kind === 'ads') await removeAdsFromWorkspace(item.workspaceId, deleted);
+    else await deleteLeads(item.workspaceId, deleted, { skipSheet: item._id });
   }
   return { deleted: deleted.length };
 }
 
-// ---------------- deleting everywhere ----------------
+// ---------------- deleting (always inside one workspace) ----------------
 /** Remove whole rows (by a column's values) from a stored sheet and close the gaps, like deleting rows in Excel. */
 function dropRows(sheet, header, values) {
   const cells = sheet.celldata || [];
@@ -296,9 +330,9 @@ function dropRows(sheet, header, values) {
   return gone.size;
 }
 
-async function dropRowsFromSheets(filter, header, values, skipId) {
+async function dropRowsFromSheets(ws, header, values, skipId) {
   const set = new Set(values.map(String));
-  const items = await col('items').find({ ...filter, type: 'sheet' }).project({ _id: 1 }).toArray();
+  const items = await col('items').find({ workspaceId: ws, type: 'sheet' }).project({ _id: 1 }).toArray();
   for (const it of items) {
     if (skipId && String(it._id) === String(skipId)) continue;
     const doc = await col('sheets').findOne({ _id: it._id });
@@ -307,47 +341,60 @@ async function dropRowsFromSheets(filter, header, values, skipId) {
     for (const s of doc.sheets || []) changed += dropRows(s, header, set);
     if (changed) {
       const live = doc.sheets.find((s) => s.id === 'live') || doc.sheets[0];
-      const rowCount = new Set((live?.celldata || []).filter((x) => x.r > 0).map((x) => x.r)).size;
-      await col('sheets').updateOne({ _id: it._id }, { $set: { sheets: doc.sheets, rowCount, updatedAt: new Date() } });
+      await col('sheets').updateOne({ _id: it._id }, { $set: { sheets: doc.sheets, rowCount: filledRows(live).size, updatedAt: new Date() } });
     }
   }
 }
 
-/** Delete leads + their ads from MongoDB and remove their rows from every sheet. */
-export async function deleteLeadsEverywhere(pageIds, { skipSheet } = {}) {
-  const ids = [...new Set(pageIds.map(String))];
-  if (!ids.length) return { leads: 0, ads: 0 };
-  const leads = await col('leads').deleteMany({ pageId: { $in: ids } });
-  const ads = await col('ads').deleteMany({ pageId: { $in: ids } });
-  await col('jobs').updateMany({ pageIds: { $in: ids } }, { $pull: { pageIds: { $in: ids } } });
-  await dropRowsFromSheets({}, 'Page ID', ids, skipSheet);
-  return { leads: leads.deletedCount, ads: ads.deletedCount };
+/** Delete leads from one workspace (and their rows in its sheets). The shared page data stays for others. */
+export async function deleteLeads(ws, pageIds, { skipSheet } = {}) {
+  const ids = [...new Set((pageIds || []).map(String))];
+  if (!ids.length) return { leads: 0 };
+  await stopPages(ws, { pageId: { $in: ids } });
+  const leads = await col('leads').deleteMany({ workspaceId: ws, pageId: { $in: ids } });
+  await col('jobs').updateMany({ workspaceId: ws, pageIds: { $in: ids } }, { $pull: { pageIds: { $in: ids } } });
+  await dropRowsFromSheets(ws, 'Page ID', ids, skipSheet);
+  return { leads: leads.deletedCount };
 }
 
-export async function deleteAdsEverywhere(adIds) {
+/** Ads are shared — "deleting" one only detaches it from this workspace's projects. */
+export async function removeAdsFromWorkspace(ws, adIds) {
   const ids = [...new Set(adIds.map(String))];
-  const pages = await col('ads').distinct('pageId', { adId: { $in: ids } });
-  const out = await col('ads').deleteMany({ adId: { $in: ids } });
-  for (const pageId of pages) {
-    await col('leads').updateOne({ pageId }, { $set: { adCount: await col('ads').countDocuments({ pageId }), updatedAt: new Date() } });
-  }
-  await dropRowsFromSheets({}, 'Ad ID', ids);
-  return { ads: out.deletedCount };
+  const projectIds = await col('projects').distinct('_id', { workspaceId: ws });
+  const out = await col('ads').updateMany({ adId: { $in: ids } }, { $pull: { projectIds: { $in: projectIds } } });
+  await dropRowsFromSheets(ws, 'Ad ID', ids);
+  return { ads: out.modifiedCount };
 }
 
-/** Delete a project and everything that belongs to it. Leads shared with another project stay there. */
-export async function deleteProjectEverywhere(pid) {
-  const project = await col('projects').findOne({ _id: pid });
+/** Delete a project and everything in it. Leads shared with another project of the same workspace stay there. */
+export async function deleteProject(ws, pid) {
+  const project = await col('projects').findOne({ _id: pid, workspaceId: ws });
   if (!project) return null;
-  const onlyHere = await col('leads').distinct('pageId', { projectIds: { $all: [pid], $size: 1 } });
-  const oldLeads = await col('leads').distinct('pageId', { projectIds: { $exists: false }, keywords: [project.keyword] });
-  const removed = await deleteLeadsEverywhere([...onlyHere, ...oldLeads]);
-  await col('leads').updateMany({ projectIds: pid }, { $pull: { projectIds: pid } });
-  const ads = await col('ads').deleteMany({ projectId: pid });
-  const jobs = await col('jobs').deleteMany({ projectId: pid });
-  const items = await col('items').find({ projectId: pid }).project({ _id: 1 }).toArray();
+  const onlyHere = await col('leads').distinct('pageId', { workspaceId: ws, projectIds: { $all: [pid], $size: 1 } });
+  const removed = await deleteLeads(ws, onlyHere);
+  await col('leads').updateMany({ workspaceId: ws, projectIds: pid }, { $pull: { projectIds: pid } });
+  const ads = await col('ads').updateMany({ projectIds: pid }, { $pull: { projectIds: pid } });
+  const jobs = await col('jobs').deleteMany({ workspaceId: ws, projectId: pid });
+  const items = await col('items').find({ projectId: pid, workspaceId: ws }).project({ _id: 1 }).toArray();
   await col('sheets').deleteMany({ _id: { $in: items.map((i) => i._id) } });
-  await col('items').deleteMany({ projectId: pid });
+  await col('items').deleteMany({ projectId: pid, workspaceId: ws });
   await col('projects').deleteOne({ _id: pid });
-  return { name: project.name, leads: removed.leads, ads: removed.ads + ads.deletedCount, searches: jobs.deletedCount };
+  return { name: project.name, leads: removed.leads, ads: ads.modifiedCount, searches: jobs.deletedCount };
+}
+
+/** Everything a workspace owns (used when an admin deletes a user). Shared pages/ads stay. */
+export async function deleteWorkspaceData(ws) {
+  const projectIds = await col('projects').distinct('_id', { workspaceId: ws });
+  await stopPages(ws);
+  await col('ads').updateMany({ projectIds: { $in: projectIds } }, { $pull: { projectIds: { $in: projectIds } } });
+  const items = await col('items').find({ workspaceId: ws }).project({ _id: 1 }).toArray();
+  await col('sheets').deleteMany({ _id: { $in: items.map((i) => i._id) } });
+  await Promise.all([
+    col('items').deleteMany({ workspaceId: ws }),
+    col('projects').deleteMany({ workspaceId: ws }),
+    col('leads').deleteMany({ workspaceId: ws }),
+    col('jobs').deleteMany({ workspaceId: ws }),
+    col('activity').deleteMany({ workspaceId: ws }),
+    col('workspaces').deleteOne({ _id: ws }),
+  ]);
 }

@@ -3,9 +3,10 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
-  FolderOpen, LayoutDashboard, LogOut, Menu, Moon, Pause, Play, Search, ScrollText, Settings, Square, Sun, Users, X, Plus,
+  FolderOpen, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Pause, Play, Search, ScrollText, Settings, Square, Sun, UserCog, Users, X, Plus,
 } from 'lucide-react';
-import { api, setKey } from '../lib/api';
+import { api } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { cn } from '../lib/utils';
 import { Button, Modal } from './ui';
 
@@ -13,7 +14,7 @@ import { Button, Modal } from './ui';
 const StatsCtx = createContext({ stats: null, refresh: () => {} });
 export const useStats = () => useContext(StatsCtx);
 
-const NAV = [
+const navFor = (admin) => [
   { label: null, items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true }] },
   {
     label: 'Data',
@@ -28,11 +29,19 @@ const NAV = [
   },
   {
     label: 'Workspace',
-    items: [
-      { to: '/settings', label: 'Settings', icon: Settings },
-      { to: '/logs', label: 'Logs', icon: ScrollText },
-    ],
+    items: [{ to: '/settings', label: 'Settings', icon: Settings }],
   },
+  ...(admin
+    ? [
+        {
+          label: 'Admin',
+          items: [
+            { to: '/users', label: 'Users', icon: UserCog },
+            { to: '/logs', label: 'Server logs', icon: ScrollText },
+          ],
+        },
+      ]
+    : []),
 ];
 
 function Logo() {
@@ -46,6 +55,8 @@ function Logo() {
 function Sidebar({ open, onClose }) {
   const navigate = useNavigate();
   const { stats } = useStats();
+  const { me } = useAuth();
+  const NAV = navFor(me?.user.role === 'admin');
   return (
     <aside
       className={cn(
@@ -117,15 +128,15 @@ function Sidebar({ open, onClose }) {
       </nav>
 
       {stats && (
-        <div className="m-3 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 dark:border-white/10 dark:bg-white/5">
+        <div className="m-3 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 dark:border-white/10 dark:bg-white/5" title="Pages the server read today, for every user together">
           <div className="flex items-center justify-between text-xs font-semibold">
-            <span className="text-slate-500 dark:text-slate-400">Today's limit</span>
-            <span className="tabular-nums">{stats.scrapedToday}/{stats.dailyLimit}</span>
+            <span className="text-slate-500 dark:text-slate-400">Pages read today</span>
+            <span className="tabular-nums">{stats.workerVisitsToday}/{stats.dailyLimit}</span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
             <div
               className="h-full w-full origin-left rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-transform duration-700"
-              style={{ transform: `scaleX(${Math.min(1, stats.scrapedToday / Math.max(1, stats.dailyLimit))})` }}
+              style={{ transform: `scaleX(${Math.min(1, stats.workerVisitsToday / Math.max(1, stats.dailyLimit))})` }}
             />
           </div>
         </div>
@@ -142,6 +153,8 @@ function Sidebar({ open, onClose }) {
  */
 function RunnerPill() {
   const { stats, refresh } = useStats();
+  const { me } = useAuth();
+  const admin = me?.user.role === 'admin';
   const [busy, setBusy] = useState('');
   const [confirmStop, setConfirmStop] = useState(false);
   if (!stats?.active) return null;
@@ -149,7 +162,7 @@ function RunnerPill() {
   const toggle = async () => {
     setBusy('toggle');
     try {
-      await api('/settings', { method: 'PUT', body: { running: !stats.running } });
+      await api('/settings', { method: 'PUT', body: { worker: { running: !stats.running } } });
       await refresh();
       toast.success(stats.running ? 'Paused' : 'Resumed');
     } catch (e) {
@@ -192,19 +205,22 @@ function RunnerPill() {
             {stats.running ? ` — ${doing}` : stats.pausedReason ? ` — ${stats.pausedReason}` : ''}
           </span>
         </span>
-        <button
-          onClick={toggle}
-          disabled={!!busy}
-          className={cn(
-            'inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold shadow-sm transition disabled:opacity-50',
-            stats.running
-              ? 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-white/5'
-              : 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-indigo-600/25 hover:shadow-md',
-          )}
-        >
-          {stats.running ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-          {stats.running ? 'Pause' : 'Resume'}
-        </button>
+        {admin && (
+          <button
+            onClick={toggle}
+            disabled={!!busy}
+            title="Pauses the worker for every user"
+            className={cn(
+              'inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold shadow-sm transition disabled:opacity-50',
+              stats.running
+                ? 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-white/5'
+                : 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-indigo-600/25 hover:shadow-md',
+            )}
+          >
+            {stats.running ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+            {stats.running ? 'Pause' : 'Resume'}
+          </button>
+        )}
         <button
           onClick={() => setConfirmStop(true)}
           disabled={!!busy}
@@ -241,7 +257,7 @@ function RunnerPill() {
             </li>
           </ul>
           <p className="text-xs text-slate-500">
-            All leads and contacts found so far are kept. You can restart the stopped pages later from the project folder. To stop only for a while, use <b>Pause</b>.
+            Only your own searches are stopped. All leads and contacts found so far are kept, and you can restart the stopped pages later from the project folder.
           </p>
         </div>
       </Modal>
@@ -268,10 +284,105 @@ function ThemeToggle() {
   );
 }
 
+function PasswordModal({ open, onClose }) {
+  const [f, setF] = useState({ current: '', next: '', again: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (open) {
+      setF({ current: '', next: '', again: '' });
+      setError('');
+    }
+  }, [open]);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (f.next !== f.again) return setError('The new passwords are not the same');
+    setBusy(true);
+    setError('');
+    try {
+      await api('/auth/password', { method: 'POST', body: { current: f.current, next: f.next } });
+      toast.success('Password changed', { description: 'Other devices were logged out.' });
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const field = (k, label, auto) => (
+    <div>
+      <label htmlFor={`pw-${k}`} className="label">{label}</label>
+      <input id={`pw-${k}`} type="password" autoComplete={auto} className="input" value={f[k]} onChange={(e) => setF((x) => ({ ...x, [k]: e.target.value }))} required />
+    </div>
+  );
+  return (
+    <Modal open={open} onClose={onClose} title="Change password" width="max-w-md">
+      <form onSubmit={submit} className="space-y-4">
+        {field('current', 'Current password', 'current-password')}
+        {field('next', 'New password (8+ characters)', 'new-password')}
+        {field('again', 'New password again', 'new-password')}
+        {error && <p role="alert" className="text-sm text-rose-600">{error}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={busy}>Save</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function UserMenu() {
+  const { me, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [pw, setPw] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [open]);
+  if (!me) return null;
+  const initials = (me.user.name || me.user.email).slice(0, 2).toUpperCase();
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Account"
+        className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-cyan-500 text-xs font-bold text-white shadow-sm"
+      >
+        {initials}
+      </button>
+      {open && (
+        <div role="menu" onClick={(e) => e.stopPropagation()} className="absolute right-0 top-11 z-50 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-dropdown dark:border-white/10 dark:bg-slate-900">
+          <div className="px-3 py-2">
+            <p className="truncate text-sm font-semibold">{me.user.name}</p>
+            <p className="truncate text-xs text-slate-500">{me.user.email}</p>
+            <p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-indigo-600">{me.user.role}</p>
+          </div>
+          <div className="my-1 h-px bg-slate-100 dark:bg-white/10" />
+          <button role="menuitem" onClick={() => { setOpen(false); setPw(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium hover:bg-slate-100 dark:hover:bg-white/5">
+            <KeyRound className="h-4 w-4 opacity-70" /> Change password
+          </button>
+          <button role="menuitem" onClick={logout} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10">
+            <LogOut className="h-4 w-4 opacity-70" /> Log out
+          </button>
+        </div>
+      )}
+      <PasswordModal open={pw} onClose={() => setPw(false)} />
+    </div>
+  );
+}
+
 export default function Layout() {
   const [open, setOpen] = useState(false);
   const [stats, setStats] = useState(null);
   const location = useLocation();
+  const isAdmin = useAuth().me?.user.role === 'admin';
   const fullBleed = /\/s\//.test(location.pathname); // sheet view uses the whole width
 
   const refresh = useCallback(async () => {
@@ -300,19 +411,9 @@ export default function Layout() {
             <div className="flex-1" />
             <RunnerPill />
             <ThemeToggle />
-            <button
-              onClick={() => {
-                setKey('');
-                window.dispatchEvent(new Event('fblf:logout'));
-              }}
-              aria-label="Logout"
-              title="Logout"
-              className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 dark:text-slate-400 dark:hover:bg-rose-500/10"
-            >
-              <LogOut className="h-[18px] w-[18px]" />
-            </button>
+            <UserMenu />
           </header>
-          {stats?.worker?.outdated && stats.worker.seenAgo < 600 && (
+          {isAdmin && stats?.worker?.outdated && stats.worker.seenAgo < 600 && (
             <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 sm:px-6">
               <b>An old extension version is running ({stats.worker.version}) — latest is {stats.worker.latest}.</b>
               <span>Open <code className="rounded bg-amber-100 px-1 dark:bg-amber-500/20">chrome://extensions</code> in Chrome and press <b>↻ Reload</b> on FB Ad Lead Finder.</span>

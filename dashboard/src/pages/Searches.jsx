@@ -286,9 +286,13 @@ export default function Searches() {
                           title="Collect again"
                           aria-label="Run again"
                           onClick={async () => {
-                            await api(`/jobs/${j.id}/requeue`, { method: 'POST' });
-                            toast.success('Queued again');
-                            load();
+                            try {
+                              await api(`/jobs/${j.id}/requeue`, { method: 'POST' });
+                              toast.success('Queued again');
+                              load();
+                            } catch (e) {
+                              toast.error(e.message);
+                            }
                           }}
                           className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-white/10"
                         >
@@ -320,9 +324,13 @@ export default function Searches() {
               onClick={async () => {
                 const j = del;
                 setDel(null);
-                await api(`/jobs/${j.id}`, { method: 'DELETE' });
-                toast.success('Deleted');
-                load();
+                try {
+                  await api(`/jobs/${j.id}`, { method: 'DELETE' });
+                  toast.success('Deleted');
+                  load();
+                } catch (e) {
+                  toast.error(e.message);
+                }
               }}
             >
               Delete

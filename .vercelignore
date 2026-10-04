@@ -1,8 +1,0 @@
-# never upload secrets or local build output to Vercel
-server/.env
-**/.env
-node_modules
-**/node_modules
-*.log
-dashboard/dist
-.claude

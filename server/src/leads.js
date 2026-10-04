@@ -1,4 +1,10 @@
-import { col, log } from './db.js';
+// Data model:
+//   pages  — one per Facebook page, shared by everybody (scraped once)
+//   ads    — one per ad, shared; `projectIds` says which projects found it
+//   leads  — one per (workspace, page): the user's own copy for filtering/export + status, notes, keywords.
+//            The scraped fields are copied from `pages` (syncLeads); fields the user edited by hand
+//            are listed in `overrides` and never overwritten.
+import { col, log, pageActivity } from './db.js';
 import { getSettings } from './settings.js';
 import { websiteContacts } from './contacts.js';
 import { runInBackground } from './background.js';
@@ -34,7 +40,38 @@ function sanitizeAd(a) {
   };
 }
 
-/** Saves ads from the Ad Library and creates a (pending) lead for every new page. */
+// ---------- pages → leads ----------
+/** Scraped page fields that are copied into every workspace's lead. */
+const SYNC_FIELDS = [
+  'pageName', 'pageUrl', 'category', 'adCategory', 'likes', 'pageImage', 'adSample', 'adCount', 'lastSeenAt', 'about', 'address',
+  'socials', 'followers', 'followersNum', 'phones', 'emails', 'whatsapp', 'websites', 'website', 'instagram', 'adLinks', 'adWebsites',
+  'scrapeStatus', 'scrapedAt', 'lastError', 'contactSource', 'country',
+];
+/** Fields a user can correct by hand (then they are theirs and never overwritten). */
+export const OVERRIDABLE = ['pageName', 'pageUrl', 'category', 'website', 'websites', 'instagram', 'phones', 'whatsapp', 'emails'];
+
+/** Copy the shared page data into every workspace's lead for these pages. */
+export async function syncLeads(pageIds) {
+  const ids = [...new Set((pageIds || []).map(String))];
+  if (!ids.length) return;
+  const pages = await col('pages').find({ pageId: { $in: ids } }).toArray();
+  for (const p of pages) {
+    const set = {};
+    for (const f of SYNC_FIELDS) {
+      if (p[f] === undefined) continue;
+      const value = { $literal: p[f] };
+      if (f === 'scrapeStatus') {
+        // a workspace that pressed Stop keeps seeing "stopped" until the page is actually read
+        set[f] = { $cond: [{ $and: [{ $eq: ['$scrapeStatus', 'stopped'] }, { $in: [p[f], ['pending', 'working']] }] }, '$scrapeStatus', value] };
+      } else if (OVERRIDABLE.includes(f)) {
+        set[f] = { $cond: [{ $in: [f, { $ifNull: ['$overrides', []] }] }, `$${f}`, value] };
+      } else set[f] = value;
+    }
+    await col('leads').updateMany({ pageId: p.pageId }, [{ $set: set }]);
+  }
+}
+
+/** Saves ads from the Ad Library, creates/updates the shared page and the workspace's lead. */
 export async function ingestAds(job, rawAds) {
   const now = new Date();
   const ads = (rawAds || []).filter((a) => a && a.adId && a.pageId).slice(0, 1000).map((a) => ({ raw: a, ad: sanitizeAd(a) }));
@@ -44,7 +81,11 @@ export async function ingestAds(job, rawAds) {
     ads.map(({ ad }) => ({
       updateOne: {
         filter: { adId: ad.adId },
-        update: { $set: { ...ad, updatedAt: now }, $setOnInsert: { createdAt: now, keyword: job.keyword, jobId: job.id, ...(job.projectId ? { projectId: job.projectId } : {}) } },
+        update: {
+          $set: { ...ad, updatedAt: now },
+          $setOnInsert: { createdAt: now, keyword: job.keyword },
+          $addToSet: { keywords: job.keyword, projectIds: { $each: job.projectId ? [job.projectId] : [] } },
+        },
         upsert: true,
       },
     })),
@@ -59,7 +100,7 @@ export async function ingestAds(job, rawAds) {
 
   for (const [pageId, list] of byPage) {
     const first = list[0].raw;
-    const existing = await col('leads').findOne({ pageId });
+    const existing = await col('pages').findOne({ pageId });
     const links = list.map((x) => analyzeLink(x.ad.linkUrl));
     const adCount = await col('ads').countDocuments({ pageId });
     const categories = Array.isArray(first.pageCategories)
@@ -74,31 +115,18 @@ export async function ingestAds(job, rawAds) {
     if (!existing?.likes && first.pageLikes) set.likes = String(first.pageLikes);
     if (!existing?.pageImage && first.pageImage) set.pageImage = str(first.pageImage, 1000);
     if (!existing?.adSample) set.adSample = str(list.find((x) => x.ad.body)?.ad.body || '', 400);
+    if (existing?.scrapeStatus === 'stopped') set.scrapeStatus = 'pending'; // somebody wants it again
 
-    await col('leads').updateOne(
+    await col('pages').updateOne(
       { pageId },
       {
         $setOnInsert: {
-          pageId,
-          createdAt: now,
-          status: 'New',
-          notes: '',
-          scrapeStatus: 'pending',
-          retries: 0,
-          phones: [],
-          emails: [],
-          websites: [],
-          website: '',
-          instagram: '',
-          contactSource: '',
-          country: job.country || '',
-          syncedAt: null,
+          pageId, createdAt: now, retries: 0, phones: [], emails: [], websites: [], website: '', instagram: '', contactSource: '',
+          country: job.country || '', ...(existing ? {} : { scrapeStatus: 'pending' }),
         },
         $set: set,
         $addToSet: {
-          keywords: job.keyword,
-          jobIds: job.id,
-          projectIds: { $each: job.projectId ? [job.projectId] : [] },
+          wantedBy: job.workspaceId,
           adLinks: { $each: uniq(list.map((x) => x.ad.linkUrl)).slice(0, 10) },
           adWebsites: { $each: uniq(links.map((l) => l.website)) },
           whatsapp: { $each: uniqPhones(links.map((l) => l.whatsapp)) },
@@ -106,7 +134,18 @@ export async function ingestAds(job, rawAds) {
       },
       { upsert: true },
     );
+
+    await col('leads').updateOne(
+      { workspaceId: job.workspaceId, pageId },
+      {
+        $setOnInsert: { workspaceId: job.workspaceId, pageId, createdAt: now, status: 'New', notes: '', overrides: [], syncedAt: null },
+        $set: { updatedAt: now },
+        $addToSet: { keywords: job.keyword, jobIds: job.id, projectIds: { $each: job.projectId ? [job.projectId] : [] } },
+      },
+      { upsert: true },
+    );
   }
+  await syncLeads([...byPage.keys()]);
   return { ads: ads.length, pages: byPage.size };
 }
 
@@ -292,18 +331,20 @@ export function parseAbout(sections = {}, r = {}) {
   };
 }
 
-/** Merges the result the extension sends after reading a Page into the lead. */
+/** Merges the result the extension sends after reading a Page into the shared page, then into every lead. */
 export async function applyResult(pageId, r = {}) {
-  const l = await col('leads').findOne({ pageId });
+  const l = await col('pages').findOne({ pageId });
   if (!l) return;
   const now = new Date();
 
   if (r.error) {
     const retries = (l.retries || 0) + 1;
-    await col('leads').updateOne(
+    await col('pages').updateOne(
       { pageId },
-      { $set: { retries, lastError: str(r.error, 300), scrapeStatus: retries >= 3 ? 'failed' : 'pending', updatedAt: now } },
+      // a failed attempt still counts towards today's limit (Facebook saw the visit)
+      { $set: { retries, lastError: str(r.error, 300), scrapeStatus: retries >= 3 ? 'failed' : 'pending', updatedAt: now, lastAttemptAt: now } },
     );
+    await syncLeads([pageId]);
     await log('warn', `Scrape failed (${retries}/3) ${l.pageName || pageId}: ${r.error}`);
     return;
   }
@@ -343,6 +384,7 @@ export async function applyResult(pageId, r = {}) {
     instagram,
     scrapeStatus: 'done',
     scrapedAt: now,
+    lastAttemptAt: now,
     updatedAt: now,
     lastError: r.notFound ? 'Page not available' : '',
     contactSource: (r.emails || []).length || (r.phones || []).length ? 'page' : l.contactSource || 'none',
@@ -350,18 +392,19 @@ export async function applyResult(pageId, r = {}) {
   if (!l.pageUrl && r.finalUrl && !/\/(login|checkpoint)/.test(r.finalUrl)) {
     set.pageUrl = r.finalUrl.replace(/\/about.*$/, '').replace(/[?&]sk=about.*$/, '');
   }
-  await col('leads').updateOne({ pageId }, { $set: set });
+  await col('pages').updateOne({ pageId }, { $set: set, $unset: { wantedBy: '' } });
+  await syncLeads([pageId]);
 
   const settings = await getSettings();
   const site = set.website;
   if (settings.websiteFallback && !emails.length && site) {
-    // after the response (on Vercel kept alive with waitUntil)
+    // after the response
     runInBackground(
       websiteContacts(site)
       .then(async (extra) => {
         if (!extra.emails.length && !extra.phones.length) return;
-        const cur = await col('leads').findOne({ pageId });
-        await col('leads').updateOne(
+        const cur = await col('pages').findOne({ pageId });
+        await col('pages').updateOne(
           { pageId },
           {
             $set: {
@@ -372,6 +415,8 @@ export async function applyResult(pageId, r = {}) {
             },
           },
         );
+        await syncLeads([pageId]);
+        await pageActivity(pageId, 'found', `${cur.pageName || pageId} — contact found on the website`);
       })
       .catch((e) => log('warn', `Website fallback failed for ${site}: ${e.message}`)),
     );
@@ -379,26 +424,28 @@ export async function applyResult(pageId, r = {}) {
 }
 
 // ---------- listing ----------
-export function buildFilter(q = {}) {
-  const and = [];
-  if (q.q) {
-    const re = new RegExp(escapeRe(q.q), 'i');
+/** Lead list filter — always limited to one workspace. Query values are forced to strings (no `kw[$ne]=` tricks). */
+export function buildFilter(ws, q = {}) {
+  const s = (v) => (v == null ? '' : String(v));
+  const and = [{ workspaceId: ws }];
+  if (s(q.q)) {
+    const re = new RegExp(escapeRe(s(q.q).slice(0, 200)), 'i');
     and.push({
-      $or: [{ pageName: re }, { category: re }, { emails: re }, { phones: re }, { whatsapp: re }, { website: re }, { address: re }, { notes: re }, { keywords: re }, { pageId: q.q }],
+      $or: [{ pageName: re }, { category: re }, { emails: re }, { phones: re }, { whatsapp: re }, { website: re }, { address: re }, { notes: re }, { keywords: re }, { pageId: s(q.q) }],
     });
   }
-  if (q.kw) and.push({ keywords: q.kw });
-  if (q.status) and.push({ status: q.status });
-  if (q.jobId) and.push({ jobIds: q.jobId });
+  if (s(q.kw)) and.push({ keywords: s(q.kw) });
+  if (s(q.status)) and.push({ status: s(q.status) });
+  if (s(q.jobId)) and.push({ jobIds: s(q.jobId) });
   if (q.scrape === 'pending') and.push({ scrapeStatus: { $in: ['pending', 'working'] } });
-  else if (q.scrape) and.push({ scrapeStatus: q.scrape });
+  else if (s(q.scrape)) and.push({ scrapeStatus: s(q.scrape) });
   if (q.has === 'email') and.push({ 'emails.0': { $exists: true } });
   if (q.has === 'phone') and.push({ $or: [{ 'phones.0': { $exists: true } }, { 'whatsapp.0': { $exists: true } }] });
   if (q.has === 'any')
     and.push({ $or: [{ 'emails.0': { $exists: true } }, { 'phones.0': { $exists: true } }, { 'whatsapp.0': { $exists: true } }] });
   if (q.has === 'none')
     and.push({ 'emails.0': { $exists: false } }, { 'phones.0': { $exists: false } }, { 'whatsapp.0': { $exists: false } });
-  return and.length ? { $and: and } : {};
+  return { $and: and };
 }
 
 const SORTS = { updatedAt: 'updatedAt', createdAt: 'createdAt', adCount: 'adCount', followers: 'followersNum', pageName: 'pageName', scrapedAt: 'scrapedAt' };
