@@ -79,6 +79,10 @@ async function syncProxy(proxy) {
       if (shExpMatch(host, "localhost") || host === "127.0.0.1" || isInNet(host, "10.0.0.0", "255.0.0.0") || isInNet(host, "172.16.0.0", "255.240.0.0") || isInNet(host, "192.168.0.0", "255.255.0.0")) {
         return "DIRECT";
       }
+      // Meta Ad Library is public & free ? keep it direct so it never lags or drains proxy data
+      if (shExpMatch(url, "*facebook.com/ads/library*")) {
+        return "DIRECT";
+      }
       if (shExpMatch(host, "*.facebook.com") || host === "facebook.com" || shExpMatch(host, "*.fbcdn.net") || host === "fbcdn.net") {
         return "PROXY ${cfg.host}:${cfg.port}";
       }
