@@ -28,9 +28,11 @@ window.__fblfRead = async function () {
 
     const href = location.href;
     const bodyText = document.body ? document.body.innerText : '';
-    if (/\/(checkpoint|login)(\/|\.php|$)/.test(location.pathname) || /you(?:'|’)re temporarily blocked|temporarily blocked from/i.test(bodyText)) {
+    if (/\/checkpoint(\/|\.php|$)/.test(location.pathname) || /you(?:'|’)re temporarily blocked|temporarily blocked from/i.test(bodyText)) {
       return { blocked: true, finalUrl: href };
     }
+    // sent to the login page (Facebook does that to an IP that opened many pages) = a login wall, not a block
+    if (/\/login(\/|\.php|$)/.test(location.pathname)) return { loggedOut: true, finalUrl: href };
     if (document.querySelector('input[name="pass"]') && bodyText.length < 5000 && !/contact|about/i.test(readText())) {
       return { loggedOut: true, finalUrl: href };
     }

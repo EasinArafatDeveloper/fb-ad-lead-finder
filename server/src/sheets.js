@@ -1,7 +1,8 @@
 // Google Sheet sync — each workspace has its own Sheet (Apps Script Web App).
 import { col, httpError, log } from './db.js';
 import { checkSheetUrl, getWsSettings } from './settings.js';
-import { AD_HEADERS, LEAD_HEADERS, adRow, leadRow } from './leads.js';
+import { accountOf } from './billing.js';
+import { AD_HEADERS, LEAD_HEADERS, STATUSES, adRow, leadRow } from './leads.js';
 
 /** Columns the team edits in the Sheet: written for new rows only, never overwritten on existing rows. */
 const TEAM_COLUMNS = ['Status', 'Notes'];
@@ -88,7 +89,9 @@ export async function pullSheet(ws) {
     const l = await col('leads').findOne({ workspaceId: ws, pageId }, { projection: { status: 1, notes: 1 } });
     if (!l) continue;
     const set = {};
-    if (row.Status && row.Status !== l.status) set.status = String(row.Status).slice(0, 40);
+    // only a real status (a typo in the Sheet would otherwise become a status nobody can filter by)
+    const status = STATUSES.find((s) => s.toLowerCase() === String(row.Status || '').trim().toLowerCase());
+    if (status && status !== l.status) set.status = status;
     if ((row.Notes || '') !== (l.notes || '')) set.notes = String(row.Notes || '').slice(0, 5000);
     if (Object.keys(set).length) {
       const now = new Date();
@@ -104,6 +107,7 @@ export async function autoSyncAll() {
   const wss = await col('workspaces').find({ 'settings.autoSync': true, 'settings.sheetUrl': { $nin: ['', null] } }).project({ _id: 1 }).toArray();
   for (const w of wss) {
     try {
+      if (!(await accountOf(w._id)).perks.sheetSync) continue; // the plan no longer includes Sheet sync
       await syncSheet(w._id, false);
     } catch (e) {
       log('warn', `Auto-sync (${w._id}): ${e.message}`);

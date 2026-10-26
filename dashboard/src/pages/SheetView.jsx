@@ -3,8 +3,10 @@ import { Link, useParams } from 'react-router-dom';
 import { Workbook } from '@fortune-sheet/react';
 import '@fortune-sheet/react/dist/index.css';
 import { toast } from 'sonner';
-import { ArrowLeft, Check, ChevronRight, CloudUpload, Download, Loader2, RefreshCw, Zap } from 'lucide-react';
+import { ArrowLeft, Check, ChevronRight, CloudUpload, Download, Loader2, Lock, RefreshCw, Zap } from 'lucide-react';
 import { api, download } from '../lib/api';
+import { useFolderNav } from '../lib/nav';
+import { usePerk } from '../components/PlanGate';
 import { cn, formatNumber } from '../lib/utils';
 import { Button, Skeleton } from '../components/ui';
 import { SheetIcon } from '../components/FileIcons';
@@ -28,6 +30,7 @@ function toSaved(sheets) {
 
 export default function SheetView() {
   const { pid, sid } = useParams();
+  const canExcel = usePerk('excelExport');
   const [meta, setMeta] = useState(null); // { item, project, path }
   const [sheets, setSheets] = useState(null);
   const [version, setVersion] = useState(0);
@@ -35,9 +38,12 @@ export default function SheetView() {
   const [busy, setBusy] = useState('');
   const pending = useRef(null);
   const timer = useRef(null);
+  // the server's version of the copy we're editing — a save from an older copy never deletes rows
+  const sheetVersion = useRef(0);
 
   const load = useCallback(async () => {
     const r = await api(`/sheets/${sid}`);
+    sheetVersion.current = r.version || 0;
     setMeta({ item: r.item, project: r.project, path: r.path });
     // start with A1 selected — without a selection FortuneSheet's name box shows "NaN"
     setSheets(r.sheets.map((s) => ({ ...s, luckysheet_select_save: s.luckysheet_select_save || [{ row: [0, 0], column: [0, 0] }] })));
@@ -52,11 +58,12 @@ export default function SheetView() {
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
     if (!pending.current) return;
-    const body = { sheets: toSaved(pending.current) };
+    const body = { sheets: toSaved(pending.current), version: sheetVersion.current };
     pending.current = null;
     setSaveState('saving');
     try {
-      const res = await api(`/sheets/${sid}`, { method: 'PUT', body });
+      const res = await api(`/sheets/${sid}`, { method: 'PUT', body, gzip: true });
+      if (res.version) sheetVersion.current = res.version;
       setSaveState((s) => (s === 'saving' ? 'saved' : s));
       if (res.deleted) toast.success(`${res.deleted} row(s) deleted`, { description: 'Removed everywhere — All Leads, other sheets and exports.' });
     } catch (e) {
@@ -84,7 +91,7 @@ export default function SheetView() {
         keepalive: true,
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sheets: toSaved(pending.current) }),
+        body: JSON.stringify({ sheets: toSaved(pending.current), version: sheetVersion.current }),
       });
     };
     window.addEventListener('beforeunload', beforeUnload);
@@ -121,25 +128,30 @@ export default function SheetView() {
   const live = meta && meta.item.kind !== 'custom';
   const parent = meta?.path?.length > 1 ? meta.path[meta.path.length - 2] : null;
   const backTo = parent ? `/projects/${pid}/f/${parent.id}` : `/projects/${pid}`;
+  const { upClick } = useFolderNav();
 
   return (
     <div className="flex h-[calc(100dvh-4rem)] flex-col">
       {/* ---------- sheet header ---------- */}
       <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-white/10 dark:bg-slate-900">
-        <Link to={backTo} aria-label="Back to folder" className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-white/10">
+        <Link
+          to={backTo}
+          onClick={upClick(backTo)}
+          aria-label="Back to folder"
+          className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-white/10">
           <ArrowLeft className="h-4 w-4" />
         </Link>
         <SheetIcon size={34} tone={meta?.item.kind === 'ads' ? 'blue' : 'green'} />
         <div className="min-w-0">
           <h1 className="truncate font-display text-base font-extrabold leading-tight">{meta?.item.name || '…'}</h1>
           <nav aria-label="Breadcrumb" className="flex items-center gap-1 truncate text-xs text-slate-500">
-            <Link to="/projects" className="hover:text-indigo-600">Projects</Link>
+            <Link to="/projects" onClick={upClick('/projects')} className="hover:text-indigo-600">Projects</Link>
             <ChevronRight className="h-3 w-3" aria-hidden="true" />
-            <Link to={`/projects/${pid}`} className="hover:text-indigo-600">{meta?.project.name}</Link>
+            <Link to={`/projects/${pid}`} onClick={upClick(`/projects/${pid}`)} className="hover:text-indigo-600">{meta?.project.name}</Link>
             {parent && (
               <>
                 <ChevronRight className="h-3 w-3" aria-hidden="true" />
-                <Link to={backTo} className="hover:text-indigo-600">{parent.name}</Link>
+                <Link to={backTo} onClick={upClick(backTo)} className="hover:text-indigo-600">{parent.name}</Link>
               </>
             )}
           </nav>
@@ -163,8 +175,14 @@ export default function SheetView() {
               {busy !== 'refresh' && <RefreshCw className="h-3.5 w-3.5" />} New data
             </Button>
           )}
-          <Button size="sm" variant="primary" onClick={exportXlsx} loading={busy === 'export'}>
-            {busy !== 'export' && <Download className="h-3.5 w-3.5" />} Excel
+          <Button
+            size="sm"
+            variant={canExcel ? 'primary' : undefined}
+            title={canExcel ? 'Download as Excel' : 'Excel export is not in your plan'}
+            onClick={canExcel ? exportXlsx : () => toast.message('Excel export is not in your plan', { description: 'Upgrade in Billing — or use CSV on the All Leads page.' })}
+            loading={busy === 'export'}
+          >
+            {busy !== 'export' && (canExcel ? <Download className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5 text-slate-400" />)} Excel
           </Button>
         </div>
       </div>

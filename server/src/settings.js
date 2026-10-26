@@ -1,4 +1,5 @@
 import { col, httpError } from './db.js';
+import { parseProxyLine, proxyLines } from './proxies.js';
 
 // ---------------- worker settings (global — one Chrome worker, one IP; admin only) ----------------
 export const DEFAULTS = {
@@ -12,20 +13,37 @@ export const DEFAULTS = {
   // login wall → wait, then continue by itself (see worker.js /wall)
   cooldownUntil: null,
   cooldownMin: 0,
+  cooldownReason: '', // why the worker takes a break (login wall, the proxy not answering …)
+  netBreaks: [], // when the server reader took a break because pages didn't load (the last 2 h decide a real pause)
+  // pages read on the server: a wall in Chrome (this PC's own IP) pauses only Chrome's reading
+  browserCooldownUntil: null,
   fullDetails: false,
   dailyLimit: 150,
   maxAds: 200,
   websiteFallback: true,
+  insights: true, // ad insights without AI (insights.js): hooks, offers, prices
   closeAdTab: true,
   proxyEnabled: false,
   proxyHost: '',
   proxyPort: 44445,
   proxyUser: '',
   proxyPass: '',
+  // several IPs, one per line "host:port:user:pass" — taken in turn, one per page (see proxies.js)
+  proxyList: '',
+  // with a proxy list the server reads the pages itself (serverReader.js): this many at once, each through
+  // its own IP, and one IP is used at most once every ipGapSec seconds
+  serverReader: true,
+  serverParallel: 5,
+  ipGapSec: 20,
 };
 
-const NUMBER_KEYS = ['delayMin', 'delayMax', 'dailyLimit', 'maxAds', 'parallel', 'proxyPort'];
-const BOOL_KEYS = ['running', 'websiteFallback', 'closeAdTab', 'fullDetails', 'proxyEnabled'];
+// "Max ads per keyword": the most one search may collect. The Ad Library itself decides how many it shows —
+// the extension scrolls until this many ads, or until no new ads load.
+export const MAX_ADS_LIMIT = 50000;
+export const clampMaxAds = (n, fallback = 200) => Math.min(MAX_ADS_LIMIT, Math.max(10, Math.round(Number(n) || fallback)));
+
+const NUMBER_KEYS = ['delayMin', 'delayMax', 'dailyLimit', 'maxAds', 'parallel', 'proxyPort', 'serverParallel', 'ipGapSec'];
+const BOOL_KEYS = ['running', 'insights', 'websiteFallback', 'closeAdTab', 'fullDetails', 'proxyEnabled', 'serverReader'];
 const STRING_KEYS = ['pausedReason', 'proxyHost', 'proxyUser', 'proxyPass'];
 
 export async function getSettings() {
@@ -40,14 +58,25 @@ export async function updateSettings(patch = {}) {
   for (const k of NUMBER_KEYS) if (k in patch) set[k] = Math.max(0, Number(patch[k]) || 0);
   for (const k of BOOL_KEYS) if (k in patch) set[k] = Boolean(patch[k]);
   for (const k of STRING_KEYS) if (k in patch) set[k] = String(patch[k] ?? '').trim().slice(0, 300);
+  if ('proxyList' in patch) {
+    const lines = proxyLines(patch.proxyList);
+    const bad = lines.find((l) => !parseProxyLine(l));
+    if (bad) throw httpError(400, `Proxy list: "${bad.slice(0, 60)}" is not host:port:user:pass`);
+    if (lines.length > 500) throw httpError(400, 'Proxy list: at most 500 proxies');
+    set.proxyList = lines.join('\n');
+  }
   if ('running' in set && set.running) {
     // Resume = start now (also ends a login-wall wait)
     set.pausedReason = '';
     set.cooldownUntil = null;
+    set.cooldownReason = '';
+    set.netBreaks = [];
   }
   if ('parallel' in set) set.parallel = Math.min(3, Math.max(1, Math.round(set.parallel) || 1));
-  if ('delayMin' in set) set.delayMin = Math.max(1, set.delayMin);
-  if ('maxAds' in set) set.maxAds = Math.min(5000, Math.max(10, set.maxAds));
+  if ('serverParallel' in set) set.serverParallel = Math.min(20, Math.max(1, Math.round(set.serverParallel) || 1));
+  if ('ipGapSec' in set) set.ipGapSec = Math.min(600, Math.round(set.ipGapSec));
+  if ('delayMin' in set) set.delayMin = Math.max(0, set.delayMin);
+  if ('maxAds' in set) set.maxAds = clampMaxAds(set.maxAds);
   if (Object.keys(set).length) await col('settings').updateOne({ _id: 'main' }, { $set: set }, { upsert: true });
   const s = await getSettings();
   if (s.delayMax < s.delayMin) {

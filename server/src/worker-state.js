@@ -24,14 +24,39 @@ export function isOutdated(v) {
   return false;
 }
 
-/** What the dashboard shows about the extension (last seen version, outdated?). Stored in MongoDB. */
+/** A version counts as "running" when it contacted the server this recently (the extension asks every minute). */
+const RUNNING_MS = 3 * 60 * 1000;
+
+/**
+ * What the dashboard shows about the extension. Several PCs can run it, so every version's last contact is
+ * kept: "outdated" only when an old version is actually running now — not because it ran some time ago.
+ */
 export async function workerInfo() {
-  const seen = await col('settings').findOne({ _id: 'worker' });
-  if (!seen?.at) return null;
+  const doc = await col('settings').findOne({ _id: 'worker' });
+  if (!doc?.at) return null;
+  const now = Date.now();
+  const running = Object.entries(doc.seen || {})
+    .map(([v, at]) => ({ version: v.replace(/_/g, '.'), at: new Date(at).getTime(), via: doc.via?.[v] || '' }))
+    .filter((x) => now - x.at < RUNNING_MS)
+    .sort((a, b) => b.at - a.at);
+  const old = running.filter((x) => isOutdated(x.version));
+  // which copies exactly: version, IP, account, browser — "an old version is running" alone didn't say where
+  // (often a second copy of the extension left in the same Chrome next to the new one)
+  const pcs = await col('pcs').find({ lastSeen: { $gt: new Date(now - RUNNING_MS) } }).toArray();
+  const names = new Map((await col('workspaces').find({ _id: { $in: pcs.map((p) => p.workspaceId).filter(Boolean) } }).project({ name: 1 }).toArray()).map((w) => [String(w._id), w.name]));
+  const oldCopies = pcs
+    .filter((p) => isOutdated(p.version))
+    .map((p) => {
+      const browser = String(p.ua || '').match(/(Edg|OPR|Chrome)\/\d+/)?.[0]?.replace('Edg', 'Edge').replace('OPR', 'Opera') || 'Chrome';
+      const acc = p.workspaceId ? names.get(String(p.workspaceId)) || 'a customer' : 'team key';
+      return `v${p.version} — ${p.name ? `${p.name}, ` : ''}IP ${p.ip || '?'}, ${browser}, ${acc}`;
+    });
   return {
-    version: seen.version || 'old',
-    outdated: isOutdated(seen.version),
+    oldCopies,
+    version: (old[0] || running[0])?.version || doc.version || 'old',
+    outdated: running.length ? old.length > 0 : isOutdated(doc.version),
+    running: running.map((x) => (x.via ? `${x.version} on ${x.via}` : x.version)),
     latest: worker.latest,
-    seenAgo: Math.round((Date.now() - new Date(seen.at).getTime()) / 1000),
+    seenAgo: Math.round((now - new Date(doc.at).getTime()) / 1000),
   };
 }

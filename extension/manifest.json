@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FB Ad Lead Finder",
-  "version": "2.2.0",
-  "description": "Finds active advertisers in the Meta Ad Library and collects their public business contact details into your own dashboard.",
+  "version": "3.6.0",
+  "description": "Collect active advertisers from the Meta Ad Library into your FB Lead Finder dashboard, with their public business contacts.",
   "permissions": [
     "storage",
     "tabs",
@@ -12,6 +12,7 @@
     "declarativeNetRequest",
     "proxy",
     "webRequest",
+    "webNavigation",
     "webRequestAuthProvider"
   ],
   "host_permissions": [
@@ -57,6 +58,17 @@
         "content/adlibrary.css"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://specter.monster/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "content/dashboard.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "optional_host_permissions": [

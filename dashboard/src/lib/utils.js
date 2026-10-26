@@ -17,6 +17,9 @@ export const timeAgo = (d) => {
   return `${Math.floor(s / 86400)} d ago`;
 };
 
+/** Only http(s) links may become an href — scraped data comes from strangers (no javascript: links). */
+export const safeUrl = (u) => (/^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : undefined);
+
 export const host = (u) => {
   try {
     return new URL(u).hostname.replace(/^www\./, '');

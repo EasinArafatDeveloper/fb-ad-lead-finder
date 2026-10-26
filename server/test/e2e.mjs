@@ -1,5 +1,5 @@
-// End-to-end test against the running server. Run inside the container:
-//   docker cp server/test/e2e.mjs fb-leads:/app/server/e2e.mjs && docker exec fb-leads node e2e.mjs
+// End-to-end test of the API. Run it with scripts/test-engine.sh — a test copy of the app on an empty database
+// (on the real server the server reader would try to read these fake pages on Facebook).
 // Creates temporary users/pages (prefix e2e-), checks multi-user isolation, the worker flow and the safety fixes,
 // then deletes everything it created.
 import crypto from 'node:crypto';
@@ -88,6 +88,12 @@ try {
   const job = await req('POST', '/api/jobs', { cookie: b.cookie, body: { keywords: `e2e b ${tag}`, country: 'BD' } });
   ok(job.status === 200, 'member queues a search');
   ok((await req('POST', '/api/jobs', { cookie: b.cookie, body: { keywords: 'x1\nx2', country: 'BD' } })).status === 429, 'daily search limit (2) enforced');
+  // deleting a search must not give the search back
+  const extra = await req('POST', '/api/jobs', { cookie: b.cookie, body: { keywords: `e2e c ${tag}`, country: 'BD' } });
+  ok(extra.status === 200, 'member uses the 2nd search');
+  const cJob = await col('jobs').findOne({ workspaceId: B.workspaceId, keyword: `e2e c ${tag}` });
+  await req('DELETE', `/api/jobs/${cJob._id}`, { cookie: b.cookie });
+  ok((await req('POST', '/api/jobs', { cookie: b.cookie, body: { keywords: 'x3', country: 'BD' } })).status === 429, 'deleting a search does not reset the daily limit');
   ok((await req('GET', '/api/jobs', { cookie: a.cookie })).json.every((j) => !j.keyword.startsWith('e2e b')), "admin's search list doesn't show the member's search");
 
   // ---------- worker ----------
@@ -113,10 +119,20 @@ try {
     sections: { Page: 'Intro\nPage · Toy shop · Shopping centre · Games/toys\n01771-084424\n+880 1771-084424\nfb@toyshop.com.bd' },
     fullText: 'Intro\nPage · Toy shop · Shopping centre · Games/toys\n01771-084424\n+880 1771-084424\nfb@toyshop.com.bd',
   };
+  // a page that never loaded (network / proxy error) goes back in the queue without using a retry
+  await col('pages').updateOne({ pageId: P(1) }, { $set: { scrapeStatus: 'working', retries: 0 } });
+  await worker('POST', '/net-error', { pageId: P(1), error: 'net::ERR_TUNNEL_CONNECTION_FAILED' });
+  const afterNet = await col('pages').findOne({ pageId: P(1) });
+  ok(afterNet.scrapeStatus === 'pending' && !afterNet.retries, 'network error → page back to pending, no retry used');
+
+  const before = (await col('leads').findOne({ workspaceId: A.workspaceId, pageId: P(1) })).updatedAt;
   await col('pages').updateOne({ pageId: P(1) }, { $set: { scrapeStatus: 'working' } });
   ok((await worker('POST', '/result', { pageId: P(1), result })).status === 200, 'worker posts the page result');
   const p1a = (await req('GET', `/api/leads/${P(1)}`, { cookie: a.cookie })).json.lead;
   const p1b = (await req('GET', `/api/leads/${P(1)}`, { cookie: b.cookie })).json.lead;
+  ok(new Date(p1a.updatedAt) > new Date(before), 'a read page marks the lead updated (Google Sheet sync sends it again)');
+  const bAds = (await req('GET', `/api/leads/${P(1)}`, { cookie: b.cookie })).json.ads;
+  ok(bAds.length > 0 && bAds.every((x) => x.keyword !== `e2e ${tag}` && !x.keywords), "member doesn't see the admin's search keyword on shared ads");
   ok(p1a.scrapeStatus === 'done' && p1b.scrapeStatus === 'done', 'one page read → done for BOTH workspaces');
   ok(p1a.emails?.[0] === 'fb@toyshop.com.bd' && p1b.phones?.[0] === '+8801771084424', 'email + phone copied to both');
   ok(p1a.instagram === 'https://www.instagram.com/toyshop_bd/', 'Instagram from the link');
@@ -148,17 +164,28 @@ try {
   const sheetItem = (await req('GET', `/api/projects/${projA.id}/items?parent=${leadsFolder.id}`, { cookie: a.cookie })).json.items.find((i) => i.name === 'All Leads');
   const sv = (await req('GET', `/api/sheets/${sheetItem.id}`, { cookie: a.cookie })).json;
   const live = sv.sheets[0];
+  let ver = sv.version;
+  const save = async (sheet, version = ver) => {
+    const r = await req('PUT', `/api/sheets/${sheetItem.id}`, { cookie: a.cookie, body: { sheets: [sheet], version } });
+    if (r.json.version) ver = r.json.version;
+    return r;
+  };
   const rows = [...new Set(live.celldata.filter((x) => x.r > 0).map((x) => x.r))].sort((x, y) => x - y);
   ok(rows.length === 2, 'live sheet has 2 rows');
   // clear the FIRST row's cells (like select + Delete key)
   const cleared = { ...live, celldata: live.celldata.filter((x) => x.r !== rows[0]) };
-  let put = await req('PUT', `/api/sheets/${sheetItem.id}`, { cookie: a.cookie, body: { sheets: [cleared] } });
+  let put = await save(cleared);
   ok(put.status === 200 && put.json.deleted === 0, 'clearing cells of a row → nothing deleted');
   ok((await req('GET', '/api/leads', { cookie: a.cookie })).json.total === 2, 'admin still has 2 leads');
   // restore, then really delete the first row (rows below move up)
-  await req('PUT', `/api/sheets/${sheetItem.id}`, { cookie: a.cookie, body: { sheets: [live] } });
+  await save(live);
   const shifted = { ...live, celldata: live.celldata.filter((x) => x.r !== rows[0]).map((x) => (x.r > rows[0] ? { ...x, r: x.r - 1 } : x)) };
-  put = await req('PUT', `/api/sheets/${sheetItem.id}`, { cookie: a.cookie, body: { sheets: [shifted] } });
+  // the same delete from an OLDER copy of the sheet (new rows were merged in meanwhile) must delete nothing
+  put = await save(shifted, ver - 1);
+  ok(put.status === 200 && put.json.deleted === 0 && put.json.stale === true, 'save from an older copy → nothing deleted');
+  ok((await req('GET', '/api/leads', { cookie: a.cookie })).json.total === 2, 'admin still has 2 leads after the stale save');
+  await save(live);
+  put = await save(shifted);
   ok(put.json.deleted === 1, 'deleting a row → that lead deleted');
   ok((await req('GET', '/api/leads', { cookie: a.cookie })).json.total === 1, 'admin now has 1 lead');
   ok((await req('GET', '/api/leads', { cookie: b.cookie })).json.total === 2, "member's leads untouched by the admin's delete");

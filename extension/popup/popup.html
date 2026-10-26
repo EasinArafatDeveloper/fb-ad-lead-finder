@@ -10,12 +10,18 @@
   <section id="stats" class="stats"></section>
   <div id="state" class="state"></div>
 
-  <label>Server URL <input id="serverUrl" placeholder="http://localhost:3002" /></label>
-  <label>Worker key <input id="apiKey" type="password" placeholder="WORKER_KEY from the server's .env" /></label>
-  <label class="check"><input id="enabled" type="checkbox" /> Run the worker in this browser</label>
+  <button id="connect" class="primary connect">Connect with your account</button>
+  <p class="hint">Opens the dashboard — log in and press "Connect this computer". No key to copy.</p>
+
+  <details class="team-only">
+    <summary>Advanced: server and key</summary>
+    <label>Server URL <input id="serverUrl" placeholder="http://localhost:3002" /></label>
+    <label>Extension key <input id="apiKey" type="password" placeholder="ext_… from the dashboard (or the team's worker key)" /></label>
+  </details>
+  <label class="check team-only"><input id="enabled" type="checkbox" /> Run the worker in this browser</label>
 
   <div class="actions">
-    <button id="save">Save &amp; Connect</button>
+    <button id="save" class="team-only">Save &amp; Connect</button>
     <button id="open" class="primary">Open Dashboard</button>
   </div>
   <p id="msg" class="msg"></p>

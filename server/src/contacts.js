@@ -1,6 +1,7 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import { BD_PHONE_RE, EMAIL_RE, cleanEmails, uniqPhones } from './util.js';
+import { detectPlatform } from './adFacts.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
@@ -82,14 +83,16 @@ export async function websiteContacts(site) {
   try {
     base = new URL(/^https?:\/\//.test(site) ? site : `https://${site}`);
   } catch {
-    return { emails: [], phones: [] };
+    return { emails: [], phones: [], platform: '' };
   }
+  let platform = '';
   const paths = ['/', '/contact', '/contact-us', '/pages/contact', '/about'];
   let emails = [];
   const phones = [];
   for (const p of paths) {
     const html = await fetchText(new URL(p, base.origin).href);
     if (!html) continue;
+    if (p === '/') platform = detectPlatform(html); // Shopify, WooCommerce … from the home page
     emails.push(...(html.match(EMAIL_RE) || []));
     for (const m of html.matchAll(/href=["']tel:([^"']+)["']/gi)) {
       try {
@@ -103,5 +106,17 @@ export async function websiteContacts(site) {
     emails = cleanEmails(emails);
     if (emails.length) break;
   }
-  return { emails: cleanEmails(emails), phones: uniqPhones(phones).slice(0, 5) };
+  return { emails: cleanEmails(emails), phones: uniqPhones(phones).slice(0, 5), platform };
+}
+
+/** Only the platform the website runs on (one look at its home page). '' = the site did not answer. */
+export async function websitePlatform(site) {
+  let base;
+  try {
+    base = new URL(/^https?:\/\//.test(site) ? site : `https://${site}`);
+  } catch {
+    return '';
+  }
+  const html = await fetchText(base.origin + '/');
+  return html ? detectPlatform(html) : '';
 }

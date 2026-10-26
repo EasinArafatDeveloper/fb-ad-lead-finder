@@ -31,3 +31,11 @@
 
 /* FortuneSheet: blend its chrome with the app */
 .fortune-container { font-family: Inter, 'Nirmala UI', system-ui, sans-serif; }
+
+/* Print / Save as PDF (e.g. the Ad insights report): only the page itself — no menu, top bar or banners */
+@media print {
+  aside, header, [role='alert'], [data-sonner-toaster] { display: none !important; }
+  body { background: #fff !important; }
+  main { max-width: none !important; padding: 0 !important; }
+  .card { break-inside: avoid; box-shadow: none !important; }
+}

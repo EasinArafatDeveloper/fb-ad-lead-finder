@@ -1,12 +1,20 @@
 // Talks to the server. The login is an httpOnly session cookie, sent automatically with every request.
 export class AuthError extends Error {}
 
-async function call(path, { method = 'GET', body } = {}) {
+/** JSON gzipped in the browser — a big workbook goes up ~10x smaller (the server unpacks it). */
+async function gzipJson(value) {
+  const stream = new Blob([JSON.stringify(value)]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Response(stream).blob();
+}
+
+async function call(path, { method = 'GET', body, gzip = false } = {}) {
+  const zipped = gzip && body !== undefined && typeof CompressionStream === 'function';
+  const headers = body !== undefined ? { 'content-type': 'application/json', ...(zipped ? { 'content-encoding': 'gzip' } : {}) } : undefined;
   const r = await fetch('/api' + path, {
     method,
     credentials: 'same-origin',
-    headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    headers,
+    body: body === undefined ? undefined : zipped ? await gzipJson(body) : JSON.stringify(body),
   });
   return r;
 }
@@ -35,4 +43,15 @@ export async function download(path, filename) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
-export const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== '' && v != null)).toString();
+/** A search was queued: wake the extension on this PC so it starts now (extension/content/dashboard.js). */
+export const kickExtension = () => {
+  try {
+    window.postMessage({ __fblf: true, type: 'kick' }, window.location.origin);
+  } catch {
+    /* no extension here — it picks the search up within 30 s */
+  }
+};
+/** The extension version listening on this page, or '' (set by extension/content/dashboard.js). */
+export const extensionHere = () => document.documentElement.dataset.fblfExtension || '';
+
+export const qs =(o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== '' && v != null)).toString();

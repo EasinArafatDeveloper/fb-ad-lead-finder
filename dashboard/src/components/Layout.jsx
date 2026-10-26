@@ -1,21 +1,23 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
-  FolderOpen, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Pause, Play, Search, ScrollText, Settings, Square, Sun, UserCog, Users, X, Plus,
+  BadgeDollarSign, Coins, Megaphone, CreditCard, FolderOpen, Gauge, KeyRound, LayoutDashboard, LogOut, MailCheck, Menu, Moon, Pause, Play, Plus, Receipt, Search, ScrollText, Settings, Square, Sun, UserCog, Users, X,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { cn } from '../lib/utils';
 import { Button, Modal } from './ui';
+import TodayCounter from './TodayCounter';
+import NotificationBell from './NotificationBell';
 
 // ---------------- live stats shared by every page ----------------
 const StatsCtx = createContext({ stats: null, refresh: () => {} });
 export const useStats = () => useContext(StatsCtx);
 
 const navFor = (admin) => [
-  { label: null, items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true }] },
+  { label: null, items: [{ to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true }] },
   {
     label: 'Data',
     items: [
@@ -28,16 +30,23 @@ const navFor = (admin) => [
     items: [{ to: '/search', label: 'Searches', icon: Search }],
   },
   {
-    label: 'Workspace',
-    items: [{ to: '/settings', label: 'Settings', icon: Settings }],
+    label: 'Account',
+    items: [
+      { to: '/billing', label: 'Billing & credits', icon: CreditCard },
+      { to: '/settings', label: 'Settings', icon: Settings },
+    ],
   },
   ...(admin
     ? [
         {
           label: 'Admin',
           items: [
-            { to: '/users', label: 'Users', icon: UserCog },
-            { to: '/logs', label: 'Server logs', icon: ScrollText },
+            { to: '/admin', label: 'Overview', icon: Gauge, end: true },
+            { to: '/admin/users', label: 'Customers', icon: UserCog },
+            { to: '/admin/orders', label: 'Orders', icon: Receipt },
+            { to: '/admin/plans', label: 'Plans & prices', icon: BadgeDollarSign },
+            { to: '/admin/notices', label: 'Notices', icon: Megaphone },
+            { to: '/admin/logs', label: 'Server logs', icon: ScrollText },
           ],
         },
       ]
@@ -45,10 +54,57 @@ const navFor = (admin) => [
 ];
 
 function Logo() {
+  return <img src="/favicon.png" alt="" width={36} height={36} className="h-9 w-9 rounded-[22%] shadow-lg shadow-indigo-500/25" />;
+}
+
+/** Header: the credits left — a click opens Billing. Red when empty. */
+function CreditsPill() {
+  const { stats } = useStats();
+  const a = stats?.account;
+  if (!a) return null;
+  const empty = !a.unlimited && a.credits <= 0; // 0 or below (a running search may go down to -overdraft)
+  const low = !a.unlimited && a.credits > 0 && a.credits < 50;
   return (
-    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 via-blue-600 to-cyan-500 font-display text-sm font-extrabold text-white shadow-lg shadow-indigo-500/30">
-      AL
-    </span>
+    <NavLink
+      to="/billing"
+      title={a.unlimited ? 'Unlimited (team account)' : `${a.credits} credits left · ${a.planName} plan — 1 credit = 1 page read`}
+      className={cn(
+        'inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-bold ring-1 ring-inset transition',
+        empty
+          ? 'bg-rose-50 text-rose-700 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-300 dark:ring-rose-500/30'
+          : low
+            ? 'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/30'
+            : 'bg-white text-slate-700 ring-slate-200 hover:ring-indigo-300 dark:bg-slate-900 dark:text-slate-200 dark:ring-white/10',
+      )}
+    >
+      <Coins className="h-3.5 w-3.5" aria-hidden="true" />
+      <span className="tabular-nums">{a.unlimited ? '∞' : a.credits.toLocaleString()}</span>
+      <span className="hidden font-medium opacity-70 sm:inline">credits</span>
+      {(empty || low) && <span className="hidden sm:inline">· Buy</span>}
+    </NavLink>
+  );
+}
+
+/** A new account: confirm the email first (searches wait until then). */
+function VerifyBanner() {
+  const { me } = useAuth();
+  const [sent, setSent] = useState(false);
+  if (!me || me.user.emailVerified !== false) return null;
+  const resend = async () => {
+    try {
+      await api('/auth/verify/resend', { method: 'POST' });
+      setSent(true);
+      toast.success(`Link sent to ${me.user.email}`);
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-100 sm:px-6">
+      <MailCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+      <span><b>Confirm your email</b> — we sent a link to {me.user.email}. Searches start once it is confirmed (check the spam folder too).</span>
+      <button type="button" onClick={resend} disabled={sent} className="font-semibold underline disabled:no-underline disabled:opacity-60">{sent ? 'Sent' : 'Send it again'}</button>
+    </div>
   );
 }
 
@@ -65,7 +121,7 @@ function Sidebar({ open, onClose }) {
       )}
     >
       <div className="flex h-16 items-center justify-between border-b border-slate-100 px-5 dark:border-white/10">
-        <NavLink to="/" className="flex items-center gap-3" onClick={onClose}>
+        <NavLink to="/dashboard" className="flex items-center gap-3" onClick={onClose}>
           <Logo />
           <div className="leading-tight">
             <div className="font-display text-[15px] font-extrabold tracking-tight">FB Lead Finder</div>
@@ -127,20 +183,7 @@ function Sidebar({ open, onClose }) {
         ))}
       </nav>
 
-      {stats && (
-        <div className="m-3 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 dark:border-white/10 dark:bg-white/5" title="Pages the server read today, for every user together">
-          <div className="flex items-center justify-between text-xs font-semibold">
-            <span className="text-slate-500 dark:text-slate-400">Pages read today</span>
-            <span className="tabular-nums">{stats.workerVisitsToday}/{stats.dailyLimit}</span>
-          </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
-            <div
-              className="h-full w-full origin-left rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-transform duration-700"
-              style={{ transform: `scaleX(${Math.min(1, stats.workerVisitsToday / Math.max(1, stats.dailyLimit))})` }}
-            />
-          </div>
-        </div>
-      )}
+      {stats && <TodayCounter stats={stats} onNavigate={onClose} />}
     </aside>
   );
 }
@@ -186,22 +229,25 @@ function RunnerPill() {
   };
 
   const waitUntil = stats.cooldownUntil ? new Date(stats.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-  const doing = stats.collecting ? 'collecting ads' : waitUntil ? `break until ${waitUntil}` : stats.pending ? 'reading pages' : 'starting';
+  // reading stops only at the end of the overdraft (e.g. -50)
+  const noCredits = stats.account && !stats.account.unlimited && stats.account.credits <= -(stats.account.overdraft || 0);
+  const doing = stats.collecting ? 'collecting ads' : noCredits && stats.pending ? 'waiting for credits' : waitUntil ? `break until ${waitUntil}` : stats.pending ? 'reading pages' : 'starting';
+  const waiting = noCredits && stats.pending && !stats.collecting;
   return (
     <>
       <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-2">
         <span
           className={cn(
             'hidden max-w-[320px] items-center gap-2 truncate rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset sm:inline-flex',
-            stats.running
+            stats.running && !waiting
               ? 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30'
               : 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30',
           )}
           title={stats.pausedReason || stats.activeName || ''}
         >
-          <span className={cn('h-2 w-2 shrink-0 rounded-full bg-current', stats.running && 'animate-pulse')} />
+          <span className={cn('h-2 w-2 shrink-0 rounded-full bg-current', stats.running && !waiting && 'animate-pulse')} />
           <span className="truncate">
-            {stats.running ? 'Running' : 'Paused'}
+            {waiting ? 'Waiting' : stats.running ? 'Running' : 'Paused'}
             {stats.activeName && ` · ${stats.activeName}`}
             {stats.running ? ` — ${doing}` : stats.pausedReason ? ` — ${stats.pausedReason}` : ''}
           </span>
@@ -393,10 +439,17 @@ export default function Layout() {
       /* auth errors are handled globally */
     }
   }, []);
+  // the header pill and sidebar counter: every 3 s while something runs, every 15 s when idle
+  const activeRef = useRef(false);
+  activeRef.current = !!stats?.active;
   useEffect(() => {
-    refresh();
-    const t = setInterval(() => !document.hidden && refresh(), 20000);
-    return () => clearInterval(t);
+    let timer;
+    const loop = async () => {
+      if (!document.hidden) await refresh();
+      timer = setTimeout(loop, activeRef.current ? 3000 : 15000);
+    };
+    loop();
+    return () => clearTimeout(timer);
   }, [refresh]);
 
   return (
@@ -411,13 +464,21 @@ export default function Layout() {
             </button>
             <div className="flex-1" />
             <RunnerPill />
+            <CreditsPill />
+            <NotificationBell />
             <ThemeToggle />
             <UserMenu />
           </header>
+          <VerifyBanner />
           {isAdmin && stats?.worker?.outdated && stats.worker.seenAgo < 600 && (
             <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 sm:px-6">
               <b>An old extension version is running ({stats.worker.version}) — latest is {stats.worker.latest}.</b>
-              <span>Open <code className="rounded bg-amber-100 px-1 dark:bg-amber-500/20">chrome://extensions</code> in Chrome and press <b>↻ Reload</b> on FB Ad Lead Finder.</span>
+              {stats.worker.oldCopies?.length > 0 && (
+                <span className="w-full text-xs">Online now: {stats.worker.oldCopies.join(' · ')}</span>
+              )}
+              <span>
+                On that computer open <code className="rounded bg-amber-100 px-1 dark:bg-amber-500/20">chrome://extensions</code>: if FB Ad Lead Finder is listed <b>twice</b>, Remove the old one; otherwise put the new ZIP in its folder and press <b>↻ Reload</b>.
+              </span>
             </div>
           )}
           <main id="main" className={cn('w-full flex-1', fullBleed ? 'p-0' : 'mx-auto max-w-7xl p-4 sm:p-6 lg:p-8')}>

@@ -1,10 +1,12 @@
 import express from 'express';
 import ExcelJS from 'exceljs';
 import { activity, col, httpError } from './db.js';
-import { adLibraryUrl } from './util.js';
-import { getSettings } from './settings.js';
+import { adLibraryUrl, cleanAdFilters } from './util.js';
+import { projectInsights } from './insights.js';
+import { clampMaxAds, getSettings } from './settings.js';
+import { accountOf, requirePerk } from './billing.js';
 import { checkSearchQuota } from './routes.js';
-import { deleteProject, itemCount, loadSheet, oid, projectStats, queuePages, saveSheet } from './projects.js';
+import { deleteProject, deleteSheetDocs, itemCount, loadSheet, oid, projectStats, queuePages, saveSheet } from './projects.js';
 
 const r = express.Router();
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).then((out) => out !== undefined && !res.headersSent && res.json(out)).catch(next);
@@ -21,6 +23,53 @@ const itemOf = (req, id, extra = {}) => col('items').findOne({ _id: oid(id), wor
 r.get('/projects', ah(async (req) => {
   const projects = await col('projects').find({ workspaceId: req.ws }).sort({ createdAt: -1 }).toArray();
   return Promise.all(projects.map(async (p) => ({ id: String(p._id), name: p.name, keyword: p.keyword, country: p.country, createdAt: p.createdAt, ...(await projectStats(p)) })));
+}));
+
+/**
+ * Projects with nothing in them: 0 leads — and not a search waiting or running (its leads are still coming),
+ * and no sheet of the user's own with something typed in it. These go with "Remove empty projects".
+ */
+export async function emptyProjects(ws) {
+  const [projects, withLeads, running, customSheets] = await Promise.all([
+    col('projects').find({ workspaceId: ws }).project({ name: 1, country: 1, createdAt: 1 }).sort({ createdAt: -1 }).toArray(),
+    col('leads').distinct('projectIds', { workspaceId: ws }),
+    col('jobs').distinct('projectId', { workspaceId: ws, phase: { $in: ['queued', 'collecting'] } }),
+    col('items').find({ workspaceId: ws, type: 'sheet', kind: 'custom' }).project({ projectId: 1 }).toArray(),
+  ]);
+  const filled = new Set(
+    (await col('sheets').find({ _id: { $in: customSheets.map((i) => i._id) }, rowCount: { $gt: 0 } }).project({ _id: 1 }).toArray()).map((s) => String(s._id)),
+  );
+  const keep = new Set([...withLeads, ...running, ...customSheets.filter((i) => filled.has(String(i._id))).map((i) => i.projectId)].map(String));
+  return projects.filter((p) => !keep.has(String(p._id)));
+}
+
+/** The empty projects with what is (not) in them, so the user can check before removing them. */
+r.get('/projects/empty', ah(async (req) => {
+  const list = await emptyProjects(req.ws);
+  const ids = list.map((p) => p._id);
+  const [ads, runs] = await Promise.all([
+    col('ads').aggregate([{ $match: { projectIds: { $in: ids } } }, { $unwind: '$projectIds' }, { $match: { projectIds: { $in: ids } } }, { $group: { _id: '$projectIds', n: { $sum: 1 } } }]).toArray(),
+    col('jobs').aggregate([{ $match: { workspaceId: req.ws, projectId: { $in: ids } } }, { $group: { _id: '$projectId', n: { $sum: 1 }, last: { $max: '$createdAt' } } }]).toArray(),
+  ]);
+  const adsOf = new Map(ads.map((x) => [String(x._id), x.n]));
+  const runsOf = new Map(runs.map((x) => [String(x._id), x]));
+  return {
+    count: list.length,
+    names: list.map((p) => p.name),
+    projects: list.map((p) => ({
+      id: String(p._id), name: p.name, country: p.country, createdAt: p.createdAt,
+      leads: 0, ads: adsOf.get(String(p._id)) || 0, searches: runsOf.get(String(p._id))?.n || 0, lastRunAt: runsOf.get(String(p._id))?.last || null,
+    })),
+  };
+}));
+
+/** Removes the empty projects — all of them, or only the `ids` the user ticked. Each one is checked again here. */
+r.post('/projects/delete-empty', ah(async (req) => {
+  const wanted = Array.isArray(req.body?.ids) ? new Set(req.body.ids.map(String)) : null;
+  const list = (await emptyProjects(req.ws)).filter((p) => !wanted || wanted.has(String(p._id)));
+  for (const p of list) await deleteProject(req.ws, p._id);
+  if (list.length) await activity('delete', `${list.length} empty project${list.length > 1 ? 's' : ''} removed (0 leads)`, { workspaceId: req.ws });
+  return { deleted: list.length };
 }));
 
 r.patch('/projects/:id', ah(async (req, res) => {
@@ -51,17 +100,75 @@ r.delete('/projects/:id', ah(async (req, res) => {
   return out;
 }));
 
+/** The project's ad insights (insights.js): hooks of long-running ads, offers, prices, formats — no AI. */
+r.get('/projects/:id/insights', ah(async (req, res) => {
+  const p = await projectOf(req, req.params.id);
+  if (!p) return notFound(res, 'Project');
+  return { project: { id: String(p._id), name: p.name, keyword: p.keyword, country: p.country }, ...(await projectInsights(p._id)) };
+}));
+
+/** The Insights report as an Excel file: a summary and every hook, offer, price, format and top advertiser. */
+r.get('/projects/:id/insights.xlsx', ah(async (req, res) => {
+  await requirePerk(req.ws, 'excelExport');
+  const p = await projectOf(req, req.params.id);
+  if (!p) return notFound(res, 'Project');
+  const d = await projectInsights(p._id, { allHooks: true });
+  const wb = new ExcelJS.Workbook();
+  const sheet = (name, columns, rows) => {
+    const ws = wb.addWorksheet(name);
+    ws.columns = columns.map(([header, key, width]) => ({ header, key, width }));
+    ws.getRow(1).font = { bold: true, color: { argb: 'FF3730A3' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF2FF' } };
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    for (const row of rows) ws.addRow(row);
+    return ws;
+  };
+  const taka = (n) => (n == null ? '' : `৳${Number(n).toLocaleString('en')}`);
+  sheet('Summary', [['Item', 'k', 34], ['Value', 'v', 70]], [
+    { k: 'Project', v: p.name },
+    { k: 'Keyword', v: `${p.keyword} (${p.country})` },
+    { k: 'Report date', v: new Date().toISOString().slice(0, 10) },
+    { k: 'Ads', v: d.ads },
+    { k: 'Running 30+ days', v: d.longRunning },
+    { k: 'Most used offer', v: d.offers?.[0]?.ads ? `${d.offers[0].offer} (${d.offers[0].pct}% of the ads)` : '—' },
+    { k: 'Typical price', v: d.prices ? `${taka(d.prices.median)} (most between ${taka(d.prices.low)} and ${taka(d.prices.high)})` : '—' },
+    { k: 'Note', v: 'Read from the ads’ own text and dates — nothing estimated.' },
+  ]);
+  const hooks = sheet('Hooks', [['Days running', 'days', 13], ['Hook (opening line)', 'hook', 90], ['Advertiser', 'pageName', 32], ['Ads with this hook', 'ads', 16], ['Advertisers using it', 'pages', 18], ['Ad link', 'link', 50]],
+    d.hooks.map((h) => ({ ...h, link: `https://www.facebook.com/ads/library/?id=${h.adId}` })));
+  hooks.getColumn('hook').alignment = { wrapText: true, vertical: 'top' };
+  sheet('Offers', [['Offer', 'offer', 24], ['Ads', 'ads', 10], ['% of ads', 'pct', 10]], d.offers);
+  sheet('Prices', [['Price level', 'k', 18], ['Price', 'v', 16]], d.prices
+    ? [['Lowest', d.prices.min], ['Low (25%)', d.prices.low], ['Typical', d.prices.median], ['High (75%)', d.prices.high], ['Highest', d.prices.max], ['Prices found', d.prices.count]].map(([k, v]) => ({ k, v: k === 'Prices found' ? v : taka(v) }))
+    : [{ k: 'No prices in the ads' }]);
+  const share = (name, rows) => sheet(name, [[name, 'name', 24], ['Ads', 'ads', 10], ['% of ads', 'pct', 10]], rows);
+  share('Formats', d.formats);
+  share('Order via', d.orderVia);
+  share('Languages', d.languages);
+  sheet('Top advertisers', [['Advertiser', 'pageName', 40], ['Ads', 'ads', 10], ['Days advertising', 'days', 16]],
+    [...new Map([...d.topByAds, ...d.topByDays].map((x) => [x.pageId, x])).values()].sort((a, b) => b.ads - a.ads));
+  const name = encodeURIComponent(`${p.name} - ad insights.xlsx`);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${name}`);
+  await wb.xlsx.write(res);
+  res.end();
+}));
+
 /** "Collect more" — run the same keyword search again; new pages land in the same project. */
 r.post('/projects/:id/search', ah(async (req, res) => {
   const p = await projectOf(req, req.params.id);
   if (!p) return notFound(res, 'Project');
   await checkSearchQuota(req, 1);
   const s = await getSettings();
-  const last = await col('jobs').findOne({ projectId: p._id }, { sort: { createdAt: -1 }, projection: { minAds: 1 } });
+  const last = await col('jobs').findOne({ projectId: p._id }, { sort: { createdAt: -1 }, projection: { minAds: 1, maxAds: 1, filters: 1 } });
+  const acc = await accountOf(req.ws); // the plan's limits
+  // the same Ad Library filters as last time, unless new ones are sent
+  const filters = cleanAdFilters(req.body?.filters || last?.filters);
   await col('jobs').insertOne({
-    workspaceId: req.ws, userId: req.user._id, keyword: p.keyword, country: p.country,
-    maxAds: Math.min(5000, Math.max(10, Number(req.body?.maxAds) || s.maxAds)), minAds: Math.max(1, Number(req.body?.minAds) || last?.minAds || 1),
-    url: adLibraryUrl(p.keyword, p.country), phase: 'queued', manual: false, adsSeen: 0, pageIds: [], projectId: p._id, createdAt: new Date(),
+    workspaceId: req.ws, userId: req.user._id, keyword: p.keyword, country: p.country, filters,
+    maxAds: Math.min(clampMaxAds(req.body?.maxAds, last?.maxAds || (acc.unlimited ? s.maxAds : acc.maxAdsPerSearch)), acc.maxAdsPerSearch),
+    minAds: acc.minAdsFilter ? Math.max(1, Number(req.body?.minAds) || last?.minAds || 1) : 1,
+    url: adLibraryUrl(p.keyword, p.country, filters), phase: 'queued', manual: false, adsSeen: 0, pageIds: [], projectId: p._id, createdAt: new Date(),
   });
   await activity('queued', `"${p.name}" — queued to search again`, { workspaceId: req.ws, projectId: p._id });
   return { ok: true };
@@ -148,7 +255,7 @@ r.delete('/items/:id', ah(async (req, res) => {
     for (const c of await col('items').find({ parentId: id }).project({ _id: 1 }).toArray()) await walk(c._id);
   };
   await walk(root._id);
-  await col('sheets').deleteMany({ _id: { $in: ids } });
+  await deleteSheetDocs(ids);
   await col('items').deleteMany({ _id: { $in: ids } });
   return { deleted: ids.length };
 }));
@@ -164,7 +271,8 @@ r.get('/sheets/:id', ah(async (req, res) => {
   const it = await getSheetItem(req, res);
   if (!it) return;
   const p = await col('projects').findOne({ _id: it.projectId });
-  return { item: await itemDTO(it), project: { id: String(p?._id), name: p?.name }, path: await breadcrumb(it), sheets: await loadSheet(it) };
+  const { sheets, version } = await loadSheet(it);
+  return { item: await itemDTO(it), project: { id: String(p?._id), name: p?.name }, path: await breadcrumb(it), sheets, version };
 }));
 
 r.put('/sheets/:id', ah(async (req, res) => {
@@ -172,9 +280,9 @@ r.put('/sheets/:id', ah(async (req, res) => {
   if (!it) return;
   const sheets = req.body?.sheets;
   if (!Array.isArray(sheets) || !sheets.length) throw httpError(400, 'Empty workbook');
-  const out = await saveSheet(it, sheets);
+  const out = await saveSheet(it, sheets, req.body?.version);
   if (out.deleted) await activity('delete', `${out.deleted} ${it.kind === 'ads' ? 'ad(s)' : 'lead(s)'} deleted from "${it.name}"`, { workspaceId: req.ws });
-  return { ok: true, savedAt: new Date(), deleted: out.deleted };
+  return { ok: true, savedAt: new Date(), deleted: out.deleted, version: out.version, stale: out.stale };
 }));
 
 const argb = (hex) => {
@@ -184,9 +292,10 @@ const argb = (hex) => {
 
 /** Excel file of exactly what the user sees in the sheet (values, bold/italic, font size & colour, fill, widths, links). */
 r.get('/sheets/:id/export.xlsx', ah(async (req, res) => {
+  await requirePerk(req.ws, 'excelExport');
   const it = await getSheetItem(req, res);
   if (!it) return;
-  const sheets = await loadSheet(it);
+  const { sheets } = await loadSheet(it);
   const wb = new ExcelJS.Workbook();
   for (const s of sheets) {
     const ws = wb.addWorksheet(String(s.name || 'Sheet').replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Sheet');

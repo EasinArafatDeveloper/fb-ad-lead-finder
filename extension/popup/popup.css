@@ -20,3 +20,9 @@ button { flex: 1; padding: 8px; border-radius: 8px; border: 1px solid var(--acce
 button.primary { background: var(--accent); color: #fff; }
 .msg { min-height: 16px; margin: 8px 0 0; font-size: 12px; }
 .msg.err { color: #e41e3f; } .msg.ok { color: #31a24c; }
+button.connect { display: block; width: 100%; padding: 10px; margin-top: 2px; }
+.hint { margin: 6px 0 4px; color: var(--muted); font-size: 11px; }
+details { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+/* a customer's popup: the team's controls are hidden (popup.js customerMode) */
+.team-only[hidden] { display: none !important; }

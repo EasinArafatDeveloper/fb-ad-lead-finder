@@ -6,8 +6,18 @@
 //            are listed in `overrides` and never overwritten.
 import { col, log, pageActivity } from './db.js';
 import { getSettings } from './settings.js';
-import { websiteContacts } from './contacts.js';
-import { runInBackground } from './background.js';
+import { websiteContacts, websitePlatform } from './contacts.js';
+import { limited } from './background.js';
+import { payForPage } from './billing.js';
+import { queueChanged } from './queueSignal.js';
+import { formatName, linkKind, orderChannel, refreshPageAdFacts, refreshSiteType } from './adFacts.js';
+import { insightsAfterIngest } from './insights.js';
+
+/** A link to the Facebook (or Instagram) page itself. */
+export const isPageUrl = (u) => /^https?:\/\/([a-z0-9-]+\.)*(facebook|fb|instagram)\.com\//i.test(String(u || ''));
+
+/** Website searches for an email (one per read page without one): 4 at a time. */
+export const websiteSearch = limited(4);
 import {
   adLink,
   analyzeLink,
@@ -23,6 +33,8 @@ import {
 
 const str = (v, max = 500) => (v == null ? '' : String(v)).slice(0, max);
 
+export const STATUSES = ['New', 'Contacted', 'Interested', 'Not Interested', 'Closed'];
+
 function sanitizeAd(a) {
   return {
     adId: str(a.adId, 40),
@@ -33,6 +45,8 @@ function sanitizeAd(a) {
     title: str(a.title, 300),
     linkUrl: str(a.linkUrl, 1000),
     cta: str(a.cta, 80),
+    ctaType: str(a.ctaType, 40), // Facebook's button type: WHATSAPP_MESSAGE, MESSAGE_PAGE, CALL_NOW, SHOP_NOW …
+    format: str(a.format, 30), // VIDEO, IMAGE, CAROUSEL, MULTI_IMAGES, DPA …
     caption: str(a.caption, 200),
     startDate: str(a.startDate, 20),
     platforms: Array.isArray(a.platforms) ? a.platforms.map((p) => str(p, 30)).slice(0, 10) : [],
@@ -46,17 +60,27 @@ const SYNC_FIELDS = [
   'pageName', 'pageUrl', 'category', 'adCategory', 'likes', 'pageImage', 'adSample', 'adCount', 'lastSeenAt', 'about', 'address',
   'socials', 'followers', 'followersNum', 'phones', 'emails', 'whatsapp', 'websites', 'website', 'instagram', 'adLinks', 'adWebsites',
   'scrapeStatus', 'scrapedAt', 'lastError', 'contactSource', 'country',
+  // from the ads (adFacts.js) and the advertiser's website
+  'firstAdDate', 'orderVia', 'adFormats', 'siteType', 'sitePlatform',
+  'ins', // ad insights without AI (insights.js)
 ];
 /** Fields a user can correct by hand (then they are theirs and never overwritten). */
 export const OVERRIDABLE = ['pageName', 'pageUrl', 'category', 'website', 'websites', 'instagram', 'phones', 'whatsapp', 'emails'];
 
-/** Copy the shared page data into every workspace's lead for these pages. */
-export async function syncLeads(pageIds) {
+/**
+ * Copy the shared page data into every workspace's lead for these pages.
+ * `touch`: the page was just read — the leads count as updated (Google Sheet sync sends them again).
+ */
+export async function syncLeads(pageIds, { touch = false } = {}) {
   const ids = [...new Set((pageIds || []).map(String))];
   if (!ids.length) return;
   const pages = await col('pages').find({ pageId: { $in: ids } }).toArray();
   for (const p of pages) {
-    const set = {};
+    // a page read for real: each workspace pays 1 credit before it sees it (billing.js) — one that can't
+    // pay keeps waiting ("waiting for credits") and sees nothing of the page yet
+    const billable = p.scrapeStatus === 'done' && p.lastError !== 'Page not available';
+    if (billable) await payForPage(p.pageId);
+    const set = touch ? { updatedAt: '$$NOW' } : {};
     for (const f of SYNC_FIELDS) {
       if (p[f] === undefined) continue;
       const value = { $literal: p[f] };
@@ -67,7 +91,9 @@ export async function syncLeads(pageIds) {
         set[f] = { $cond: [{ $in: [f, { $ifNull: ['$overrides', []] }] }, `$${f}`, value] };
       } else set[f] = value;
     }
-    await col('leads').updateMany({ pageId: p.pageId }, [{ $set: set }]);
+    // a read page's data goes only to the leads that paid for it; the others wait and see nothing yet
+    await col('leads').updateMany(billable ? { pageId: p.pageId, charged: true } : { pageId: p.pageId }, [{ $set: set }]);
+    if (billable) await col('leads').updateMany({ pageId: p.pageId, charged: { $ne: true } }, { $set: { scrapeStatus: 'pending' } });
   }
 }
 
@@ -109,7 +135,9 @@ export async function ingestAds(job, rawAds) {
 
     const set = { adCount, updatedAt: now, lastSeenAt: now };
     if (!existing?.pageName && first.pageName) set.pageName = str(first.pageName, 200);
-    if (!existing?.pageUrl && first.pageUrl) set.pageUrl = str(first.pageUrl, 300);
+    // only a Facebook/Instagram address is the page's link — a click-to-WhatsApp ad gives a wa.me /
+    // api.whatsapp.com link here, which can't be read (the page is then reached by its id instead)
+    if (!existing?.pageUrl && isPageUrl(first.pageUrl)) set.pageUrl = str(first.pageUrl, 300);
     if (categories) set.adCategory = str(categories, 200); // kept separately so a scrape can never overwrite it
     if (!validCategory(existing?.category) && categories) set.category = str(categories, 200);
     if (!existing?.likes && first.pageLikes) set.likes = String(first.pageLikes);
@@ -145,6 +173,9 @@ export async function ingestAds(job, rawAds) {
       { upsert: true },
     );
   }
+  queueChanged(); // new pages may wait now — the page queue looks again at once
+  await refreshPageAdFacts([...byPage.keys()]); // advertising since, order channels, ad formats, site type
+  await insightsAfterIngest(ads.map((x) => x.ad.adId)); // hooks, offers, prices (insights.js — never throws)
   await syncLeads([...byPage.keys()]);
   return { ads: ads.length, pages: byPage.size };
 }
@@ -344,7 +375,7 @@ export async function applyResult(pageId, r = {}) {
       // a failed attempt still counts towards today's limit (Facebook saw the visit)
       { $set: { retries, lastError: str(r.error, 300), scrapeStatus: retries >= 3 ? 'failed' : 'pending', updatedAt: now, lastAttemptAt: now } },
     );
-    await syncLeads([pageId]);
+    await syncLeads([pageId], { touch: retries >= 3 });
     await log('warn', `Scrape failed (${retries}/3) ${l.pageName || pageId}: ${r.error}`);
     return;
   }
@@ -393,15 +424,32 @@ export async function applyResult(pageId, r = {}) {
     set.pageUrl = r.finalUrl.replace(/\/about.*$/, '').replace(/[?&]sk=about.*$/, '');
   }
   await col('pages').updateOne({ pageId }, { $set: set, $unset: { wantedBy: '' } });
-  await syncLeads([pageId]);
+  await refreshSiteType(pageId); // its own website may be known now
+  await syncLeads([pageId], { touch: true });
 
   const settings = await getSettings();
   const site = set.website;
+  // the platform of its own website (Shopify, WooCommerce …) — one look at the home page, once per page
+  if (site && linkKind(/^https?:\/\//.test(site) ? site : `https://${site}`) === 'site' && !l.sitePlatform && !(settings.websiteFallback && !emails.length)) {
+    websiteSearch(() =>
+      websitePlatform(site)
+        .then(async (sitePlatform) => {
+          if (!sitePlatform) return;
+          await col('pages').updateOne({ pageId }, { $set: { sitePlatform } });
+          await col('leads').updateMany({ pageId }, { $set: { sitePlatform } });
+        })
+        .catch(() => {}),
+    );
+  }
   if (settings.websiteFallback && !emails.length && site) {
-    // after the response
-    runInBackground(
+    // after the response, at most a few at a time
+    websiteSearch(() =>
       websiteContacts(site)
       .then(async (extra) => {
+        if (extra.platform && linkKind(/^https?:\/\//.test(site) ? site : `https://${site}`) === 'site') {
+          await col('pages').updateOne({ pageId }, { $set: { sitePlatform: extra.platform } });
+          await col('leads').updateMany({ pageId }, { $set: { sitePlatform: extra.platform } });
+        }
         if (!extra.emails.length && !extra.phones.length) return;
         const cur = await col('pages').findOne({ pageId });
         await col('pages').updateOne(
@@ -415,7 +463,7 @@ export async function applyResult(pageId, r = {}) {
             },
           },
         );
-        await syncLeads([pageId]);
+        await syncLeads([pageId], { touch: true });
         await pageActivity(pageId, 'found', `${cur.pageName || pageId} — contact found on the website`);
       })
       .catch((e) => log('warn', `Website fallback failed for ${site}: ${e.message}`)),
@@ -445,11 +493,71 @@ export function buildFilter(ws, q = {}) {
     and.push({ $or: [{ 'emails.0': { $exists: true } }, { 'phones.0': { $exists: true } }, { 'whatsapp.0': { $exists: true } }] });
   if (q.has === 'none')
     and.push({ 'emails.0': { $exists: false } }, { 'phones.0': { $exists: false } }, { 'whatsapp.0': { $exists: false } });
+  // "must have" chips — each one ticked narrows the list (Phone + Email = both)
+  for (const n of s(q.need).split(',')) if (NEED[n]) and.push(NEED[n]);
+  if (s(q.cat)) and.push({ category: new RegExp(escapeRe(s(q.cat).slice(0, 100)), 'i') });
+  if (s(q.country)) and.push({ country: s(q.country) });
+  const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
+  if (num(q.minFollowers)) and.push({ followersNum: { $gte: num(q.minFollowers) } });
+  if (num(q.maxFollowers)) and.push({ followersNum: { $lte: num(q.maxFollowers) } });
+  if (num(q.minAds)) and.push({ adCount: { $gte: num(q.minAds) } });
+  if (num(q.days)) and.push({ createdAt: { $gte: new Date(Date.now() - num(q.days) * 86400e3) } });
+  // from the ads: how it takes orders, ad formats (any of the ticked ones), its website, advertising for N+ days
+  const list = (v) => s(v).split(',').map((x) => x.trim()).filter(Boolean).slice(0, 10);
+  if (list(q.via).length) and.push({ orderVia: { $in: list(q.via) } });
+  if (list(q.format).length) and.push({ adFormats: { $in: list(q.format) } });
+  if (list(q.site).length) and.push({ siteType: { $in: list(q.site) } });
+  if (list(q.platform).length) and.push({ sitePlatform: { $in: list(q.platform) } });
+  if (list(q.offer).length) and.push({ 'ins.offers': { $in: list(q.offer) } }); // insights.js
+  if (num(q.minRunDays)) and.push({ firstAdDate: { $gt: '', $lte: dayOffset(-num(q.minRunDays)) } });
   return { $and: and };
 }
+const NEED = {
+  phone: { 'phones.0': { $exists: true } },
+  whatsapp: { 'whatsapp.0': { $exists: true } },
+  email: { 'emails.0': { $exists: true } },
+  website: { website: { $nin: ['', null] } },
+  nowebsite: { website: { $in: ['', null] } },
+};
+/** The chip counts: how many of the leads (with every other filter) have each kind of contact. */
+export const CONTACT_KINDS = {
+  phone: NEED.phone,
+  whatsapp: NEED.whatsapp,
+  email: NEED.email,
+  website: NEED.website,
+  none: { 'emails.0': { $exists: false }, 'phones.0': { $exists: false }, 'whatsapp.0': { $exists: false } },
+};
 
-const SORTS = { updatedAt: 'updatedAt', createdAt: 'createdAt', adCount: 'adCount', followers: 'followersNum', pageName: 'pageName', scrapedAt: 'scrapedAt' };
-export const buildSort = (sort, dir) => ({ [SORTS[sort] || 'updatedAt']: dir === 'asc' ? 1 : -1, _id: 1 });
+/** The date N days from today as YYYY-MM-DD (the ads' start dates are stored that way). */
+const dayOffset = (n) => new Date(Date.now() + n * 86400e3).toISOString().slice(0, 10);
+/** Days since a YYYY-MM-DD date (advertising for N days). */
+export const runningDays = (d) => (d ? Math.max(0, Math.floor((Date.now() - Date.parse(d)) / 86400e3)) : '');
+
+const SORTS = { running: 'firstAdDate', updatedAt: 'updatedAt', createdAt: 'createdAt', adCount: 'adCount', followers: 'followersNum', pageName: 'pageName', scrapedAt: 'scrapedAt', contacts: '_contacts' };
+// "running": most days first = the earliest first ad first
+export const buildSort = (sort, dir) => ({ [SORTS[sort] || 'updatedAt']: (dir === 'asc') !== (sort === 'running') ? 1 : -1, _id: 1 });
+
+/**
+ * The leads for a list or an export, sorted. "Most contacts" counts phones + WhatsApp + emails per lead,
+ * which needs an aggregation; every other sort is a plain find.
+ */
+export function leadsCursor(ws, q, { skip = 0, limit }) {
+  const filter = buildFilter(ws, q);
+  const sort = buildSort(q.sort, q.dir);
+  if (q.sort !== 'contacts') return col('leads').find(filter).sort(sort).skip(skip).limit(limit);
+  const size = (f) => ({ $size: { $ifNull: [`$${f}`, []] } });
+  return col('leads').aggregate(
+    [
+      { $match: filter },
+      { $addFields: { _contacts: { $add: [size('phones'), size('whatsapp'), size('emails')] } } },
+      { $sort: sort },
+      { $skip: skip },
+      { $limit: limit },
+      { $project: { _contacts: 0 } },
+    ],
+    { allowDiskUse: true },
+  );
+}
 
 // ---------- export rows (Excel / CSV / Google Sheet) ----------
 export const LEAD_HEADERS = [
@@ -457,6 +565,8 @@ export const LEAD_HEADERS = [
   'Other Links', 'Address', 'Bio', 'Hours', 'Price Range', 'Service Area', 'Services', 'Rating', 'Page Info',
   'Followers', 'Likes', 'Active Ads', 'Keywords', 'Ad Landing Link', 'Sample Ad Text', 'Page Ads (Library)',
   'Status', 'Notes', 'Scrape Status', 'Scraped At',
+  'Advertising Since', 'Running Days', 'Orders Via', 'Ad Formats', 'Website Type', 'Website Platform',
+  'Best Ad Hook', 'Offers', 'Price Range',
 ];
 
 export const leadRow = (l) => [
@@ -489,9 +599,21 @@ export const leadRow = (l) => [
   l.notes || '',
   l.scrapeStatus || '',
   fmtDate(l.scrapedAt),
+  l.firstAdDate || '',
+  runningDays(l.firstAdDate),
+  (l.orderVia || []).join(', '),
+  (l.adFormats || []).join(', '),
+  l.siteType || '',
+  l.sitePlatform || '',
+  l.ins?.bestHook || '',
+  (l.ins?.offers || []).join(', '),
+  priceRange(l.ins),
 ];
 
-export const AD_HEADERS = ['Ad ID', 'Page ID', 'Page Name', 'Ad Text', 'Headline', 'Landing Link', 'CTA', 'Start Date', 'Platforms', 'Keyword', 'Ad Link'];
+/** "৳950 – ৳2,450" from the insights' price range. */
+export const priceRange = (ins) => (ins?.priceMin == null ? '' : ins.priceMin === ins.priceMax ? `৳${ins.priceMin.toLocaleString('en')}` : `৳${ins.priceMin.toLocaleString('en')} – ৳${ins.priceMax.toLocaleString('en')}`);
+
+export const AD_HEADERS = ['Ad ID', 'Page ID', 'Page Name', 'Ad Text', 'Headline', 'Landing Link', 'CTA', 'Start Date', 'Platforms', 'Keywords', 'Ad Link', 'Format', 'Order Via', 'Hook', 'Offers', 'Price'];
 
 export const adRow = (a) => [
   a.adId,
@@ -503,6 +625,11 @@ export const adRow = (a) => [
   a.cta || '',
   a.startDate || '',
   (a.platforms || []).join(', '),
-  a.keyword || '',
+  (a.keywords || [a.keyword]).filter(Boolean).join(', '),
   adLink(a.adId),
+  formatName(a.format),
+  orderChannel(a),
+  a.ins?.hook || '',
+  (a.ins?.offers || []).join(', '),
+  (a.ins?.prices || []).map((p) => `৳${p.toLocaleString('en')}`).join(', '),
 ];

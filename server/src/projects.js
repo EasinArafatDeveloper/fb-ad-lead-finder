@@ -1,7 +1,11 @@
 // Projects (one per keyword search, per workspace) → folders → sheets (Google-Sheets-like workbooks, FortuneSheet format).
-import { ObjectId } from 'mongodb';
-import { col } from './db.js';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import { Binary, ObjectId } from 'mongodb';
+import { col, httpError } from './db.js';
+import { queueChanged } from './queueSignal.js';
 import { adLink, fmtDate, pageAdsLink, pageLink } from './util.js';
+import { formatName, orderChannel } from './adFacts.js';
+import { priceRange } from './leads.js';
 
 export const oid = (id) => {
   try {
@@ -74,12 +78,23 @@ export async function itemCount(item) {
   return s?.rowCount || 0;
 }
 
+// "leads with a contact" reads every lead of the project — counted at most once a minute per project
+const contactCounts = new Map();
+async function contactCount(ws, pid) {
+  const hit = contactCounts.get(String(pid));
+  if (hit && Date.now() - hit.at < 60e3) return hit.n;
+  const n = await col('leads').countDocuments({ workspaceId: ws, projectIds: pid, ...CONTACT });
+  contactCounts.set(String(pid), { at: Date.now(), n });
+  if (contactCounts.size > 20000) contactCounts.clear();
+  return n;
+}
+
 export async function projectStats(p) {
   const pid = p._id;
   const ws = p.workspaceId;
   const [leads, withContact, pending, stopped, ads, jobs] = await Promise.all([
     col('leads').countDocuments({ workspaceId: ws, projectIds: pid }),
-    col('leads').countDocuments({ workspaceId: ws, projectIds: pid, ...CONTACT }),
+    contactCount(ws, pid),
     col('leads').countDocuments({ workspaceId: ws, projectIds: pid, scrapeStatus: { $in: ['pending', 'working'] } }),
     col('leads').countDocuments({ workspaceId: ws, projectIds: pid, scrapeStatus: 'stopped' }),
     col('ads').countDocuments({ projectIds: pid }),
@@ -109,11 +124,13 @@ export async function queuePages(ws, pageIds, { force = false } = {}) {
   if (!pageIds.length) return 0;
   const now = new Date();
   const statuses = force ? ['stopped', 'done', 'failed'] : ['stopped'];
+  // a fresh start: every count of the earlier attempts is forgotten (docs/ENGINE.md §2)
   await col('pages').updateMany(
     { pageId: { $in: pageIds }, scrapeStatus: { $in: statuses } },
-    { $set: { scrapeStatus: 'pending', retries: 0, lastError: '', updatedAt: now } },
+    { $set: { scrapeStatus: 'pending', retries: 0, lastError: '', updatedAt: now }, $unset: { loginWalls: '', serverMisses: '', needsBrowser: '', chromeSince: '' } },
   );
   await col('pages').updateMany({ pageId: { $in: pageIds } }, { $addToSet: { wantedBy: ws } });
+  queueChanged();
   await col('leads').updateMany({ workspaceId: ws, pageId: { $in: pageIds }, scrapeStatus: { $in: statuses } }, { $set: { scrapeStatus: 'pending', updatedAt: now } });
   return pageIds.length;
 }
@@ -127,15 +144,27 @@ const LEAD_COLS = [
   ['Email', 200, (l) => (l.emails || []).join(', ')],
   ['Website', 170, (l) => l.website || '', 'link'],
   ['Category', 140, (l) => l.category || ''],
-  ['Address', 240, (l) => l.address || ''],
+  // long texts are shortened in the sheet (the whole workbook is one 16 MB document); exports keep them whole
+  ['Address', 240, (l) => (l.address || '').slice(0, 200)],
   ['Followers', 80, (l) => l.followers || ''],
   ['Active Ads', 80, (l) => l.adCount || 0],
-  ['Bio', 260, (l) => l.about?.bio || ''],
-  ['Hours', 110, (l) => l.about?.hours || ''],
-  ['Service Area', 200, (l) => l.about?.serviceArea || ''],
-  ['Services', 160, (l) => l.about?.services || ''],
+  // from the ads (adFacts.js) — real Facebook data
+  ['Advertising Since', 110, (l) => l.firstAdDate || ''],
+  ['Orders Via', 150, (l) => (l.orderVia || []).join(', ')],
+  ['Ad Formats', 140, (l) => (l.adFormats || []).join(', ')],
+  ['Website Type', 120, (l) => l.siteType || ''],
+  ['Website Platform', 120, (l) => l.sitePlatform || ''],
+  // ad insights without AI (insights.js) and the keywords the lead was found with
+  ['Best Ad Hook', 260, (l) => l.ins?.bestHook || ''],
+  ['Offers', 160, (l) => (l.ins?.offers || []).join(', ')],
+  ['Price Range', 120, (l) => priceRange(l.ins)],
+  ['Keywords', 180, (l) => (l.keywords || []).join(', ')],
+  ['Bio', 260, (l) => (l.about?.bio || '').slice(0, 300)],
+  ['Hours', 110, (l) => (l.about?.hours || '').slice(0, 80)],
+  ['Service Area', 200, (l) => (l.about?.serviceArea || '').slice(0, 150)],
+  ['Services', 160, (l) => (l.about?.services || '').slice(0, 200)],
   ['Instagram', 170, (l) => l.instagram || '', 'link'],
-  ['Other Links', 170, (l) => (l.socials || []).join(', ')],
+  ['Other Links', 170, (l) => (l.socials || []).join(', ').slice(0, 300)],
   ['Page Ads', 160, (l) => pageAdsLink(l.pageId), 'link'],
   ['Status', 100, (l) => l.status || 'New'],
   ['Notes', 200, (l) => l.notes || ''],
@@ -144,20 +173,30 @@ const LEAD_COLS = [
 ];
 const AD_COLS = [
   ['Page Name', 170, (a) => a.pageName || ''],
-  ['Ad Text', 320, (a) => a.body || ''],
+  // shortened: the whole workbook lives in one 16 MB document (the full text is in the Excel export)
+  ['Ad Text', 320, (a) => (a.body || '').slice(0, 500)],
   ['Headline', 180, (a) => a.title || ''],
   ['Landing Link', 200, (a) => a.linkUrl || '', 'link'],
   ['CTA', 100, (a) => a.cta || ''],
+  ['Format', 90, (a) => formatName(a.format)],
+  ['Order Via', 100, (a) => orderChannel(a)],
+  ['Hook', 240, (a) => a.ins?.hook || ''],
+  ['Offers', 150, (a) => (a.ins?.offers || []).join(', ')],
+  ['Price', 100, (a) => (a.ins?.prices || []).map((p) => `৳${p.toLocaleString('en')}`).join(', ')],
+  ['Keywords', 160, (a) => (a.keywords || [a.keyword]).filter(Boolean).join(', ')],
   ['Start Date', 95, (a) => a.startDate || ''],
   ['Platforms', 140, (a) => (a.platforms || []).join(', ')],
   ['Ad Link', 200, (a) => adLink(a.adId), 'link'],
   ['Page ID', 150, (a) => a.pageId],
   ['Ad ID', 150, (a) => a.adId],
 ];
+// columns that came after the first sheets were made (added to older sheets once, see mergeLive)
+const LATER_COLS = new Set(['Advertising Since', 'Orders Via', 'Ad Formats', 'Website Type', 'Website Platform', 'Format', 'Order Via', 'Best Ad Hook', 'Offers', 'Price Range', 'Keywords', 'Hook', 'Price']);
 const colsFor = (kind) => (kind === 'ads' ? { cols: AD_COLS, key: 'Ad ID' } : { cols: LEAD_COLS, key: 'Page ID' });
 
 const HEADER_STYLE = { bl: 1, bg: '#eef2ff', fc: '#3730a3' };
-const textCell = (v) => (typeof v === 'number' ? { v, m: String(v), ff: 'Arial', ct: { fa: 'General', t: 'n' } } : { v: String(v), m: String(v), ff: 'Arial', ct: { fa: '@', t: 's' } });
+// (no font name per cell — the sheet's default font is used; saves room in the 16 MB workbook)
+const textCell = (v) => (typeof v === 'number' ? { v, m: String(v), ct: { fa: 'General', t: 'n' } } : { v: String(v), m: String(v), ct: { fa: '@', t: 's' } });
 const isEmpty = (cell) => !cell || cell.v === undefined || cell.v === null || cell.v === '';
 
 async function sourceRows(item) {
@@ -181,6 +220,21 @@ function mergeLive(sheet, item, rows, removedKeys) {
   const keyC = header[key];
   if (keyC === undefined) return 0; // user removed the key column → don't touch the sheet
 
+  // columns added to the app later: put them at the end of an existing sheet once (a column the user deletes
+  // afterwards stays deleted — it is remembered in "addedCols")
+  sheet.addedCols = sheet.addedCols || [];
+  let newCols = 0;
+  let lastC = Math.max(-1, ...(sheet.celldata || []).filter((x) => x.r === 0).map((x) => x.c));
+  for (const [h, w] of cols) {
+    if (header[h] !== undefined || sheet.addedCols.includes(h) || !LATER_COLS.has(h)) continue;
+    lastC++;
+    header[h] = lastC;
+    cells.set(`0_${lastC}`, { r: 0, c: lastC, v: { ...textCell(h), ...HEADER_STYLE } });
+    sheet.config = { ...(sheet.config || {}), columnlen: { ...(sheet.config?.columnlen || {}), [lastC]: w } };
+    sheet.column = Math.max(sheet.column || 26, lastC + 4);
+    sheet.addedCols.push(h);
+    newCols++;
+  }
   const rowOfKey = new Map();
   let maxRow = 0;
   for (const x of sheet.celldata || []) {
@@ -217,7 +271,7 @@ function mergeLive(sheet, item, rows, removedKeys) {
   }
   sheet.celldata = [...cells.values()];
   sheet.row = Math.max(sheet.row || 100, maxRow + 50);
-  return added;
+  return added + newCols;
 }
 
 const keysOf = (sheet, key) => {
@@ -227,29 +281,92 @@ const keysOf = (sheet, key) => {
   return cells.filter((x) => x.c === keyC && x.r > 0 && !isEmpty(x.v)).map((x) => String(x.v.v));
 };
 
+/**
+ * The workbook, with new rows from MongoDB merged into the live tab. `version` goes up on every save —
+ * the browser sends it back when saving, so a save made from an older copy can be recognised.
+ */
+// ---------------- storing a workbook ----------------
+// A workbook can be any size. It is stored gzipped (the sheet format repeats a lot, ~10x smaller); up to 8 MB
+// it sits in the sheet's own document, bigger ones are split into 8 MB parts in `sheetblobs` (one MongoDB
+// document can't pass 16 MB). A save writes the new parts first and points the document at them, then removes
+// the old parts — a save that fails half-way never leaves a broken workbook behind.
+const INLINE_MAX = 8 * 1048576;
+const PART = 8 * 1048576;
+const zip = (sheets) => gzipSync(Buffer.from(JSON.stringify(sheets || [])));
+const unzip = (buf) => JSON.parse(gunzipSync(buf).toString('utf8'));
+const binBytes = (b) => Buffer.from(b.buffer ?? b);
+
+/** Store a workbook on its sheet document (with `extra` fields); returns the document's new version. */
+async function storeWorkbook(id, sheets, extra) {
+  const buf = zip(sheets);
+  const big = buf.length > INLINE_MAX;
+  const blobId = big ? new ObjectId() : null;
+  if (big) {
+    const parts = [];
+    for (let n = 0, at = 0; at < buf.length; n++, at += PART) parts.push({ sheetId: id, blobId, n, data: new Binary(buf.subarray(at, at + PART)) });
+    await col('sheetblobs').insertMany(parts);
+  }
+  let out;
+  try {
+    out = await col('sheets').findOneAndUpdate(
+      { _id: id },
+      {
+        $set: { ...extra, ...(big ? { blob: { id: blobId, bytes: buf.length } } : { sheetsZ: new Binary(buf) }), updatedAt: new Date() },
+        $unset: big ? { sheets: '', sheetsZ: '' } : { sheets: '', blob: '' },
+        $inc: { version: 1 },
+      },
+      { upsert: true, returnDocument: 'after', projection: { version: 1 } },
+    );
+  } catch (e) {
+    if (big) await col('sheetblobs').deleteMany({ blobId });
+    throw e;
+  }
+  // the parts of the earlier copy are not needed any more
+  await col('sheetblobs').deleteMany({ sheetId: id, ...(big ? { blobId: { $ne: blobId } } : {}) });
+  return out?.version || 0;
+}
+
+/** The stored document with its workbook unpacked (inline, in parts, or from before it was packed). */
+async function sheetDoc(id) {
+  const doc = await col('sheets').findOne({ _id: id });
+  if (doc?.blob) {
+    const parts = await col('sheetblobs').find({ blobId: doc.blob.id }).sort({ n: 1 }).toArray();
+    doc.sheets = unzip(Buffer.concat(parts.map((x) => binBytes(x.data))));
+    delete doc.blob;
+  } else if (doc?.sheetsZ) {
+    doc.sheets = unzip(binBytes(doc.sheetsZ));
+    delete doc.sheetsZ;
+  }
+  return doc;
+}
+
+/** Delete sheets and their stored parts. */
+export async function deleteSheetDocs(ids) {
+  if (!ids.length) return;
+  await col('sheets').deleteMany({ _id: { $in: ids } });
+  await col('sheetblobs').deleteMany({ sheetId: { $in: ids } });
+}
+
 export async function loadSheet(item) {
-  let doc = await col('sheets').findOne({ _id: item._id });
+  let doc = await sheetDoc(item._id);
   if (!doc) doc = { _id: item._id, sheets: [item.kind === 'custom' ? { ...blankSheet({ ...item, kind: 'custom' }), celldata: [], config: {} } : blankSheet(item)], removedKeys: [] };
+  let version = doc.version || 0;
   if (item.kind === 'leads' || item.kind === 'ads') {
     const live = doc.sheets.find((s) => s.id === 'live') || doc.sheets[0];
     const added = mergeLive(live, item, await sourceRows(item), doc.removedKeys);
-    if (added || !doc.updatedAt) await saveSheetDoc(item, doc.sheets, doc.removedKeys);
+    if (added || !doc.updatedAt) version = await saveSheetDoc(item, doc.sheets, doc.removedKeys);
   }
-  return doc.sheets;
+  return { sheets: doc.sheets, version };
 }
 
 /** Rows that have at least one non-empty cell. */
 const filledRows = (sheet) => new Set((sheet?.celldata || []).filter((x) => x.r > 0 && !isEmpty(x.v)).map((x) => x.r));
 
+/** Saves the workbook; returns its new version. */
 async function saveSheetDoc(item, sheets, removedKeys) {
   const live = sheets.find((s) => s.id === 'live') || sheets[0];
-  await col('sheets').updateOne(
-    { _id: item._id },
-    { $set: { workspaceId: item.workspaceId, sheets, removedKeys, rowCount: filledRows(live).size, updatedAt: new Date() } },
-    { upsert: true },
-  );
+  return storeWorkbook(item._id, sheets, { workspaceId: item.workspaceId, removedKeys, rowCount: filledRows(live).size });
 }
-
 // A second column that is unique per row: if both the key AND this value are gone, the row was deleted
 // (and not just a cleared Page ID cell).
 const WITNESS = { leads: 'Page Link', ads: 'Ad Link' };
@@ -268,11 +385,19 @@ function valuesByRow(sheet, header) {
  * this workspace. Only *deleted rows* count: clearing cells (selecting a range and pressing Delete) leaves
  * the rows in place, so nothing is removed — the sheet must actually have fewer rows than before.
  */
-export async function saveSheet(item, sheets) {
-  const prev = await col('sheets').findOne({ _id: item._id });
+export async function saveSheet(item, sheets, version) {
+  const prev = await sheetDoc(item._id);
+  // keep which later columns were already added (the editor in the browser may not send it back)
+  for (const s of sheets) {
+    const before = (prev?.sheets || []).find((x) => x.id === s.id);
+    if (before?.addedCols && !s.addedCols) s.addedCols = before.addedCols;
+  }
   let removedKeys = prev?.removedKeys || [];
   const deleted = [];
-  if (item.kind === 'leads' || item.kind === 'ads') {
+  // Saved from an older copy (new rows were merged in meanwhile — "New data", Excel export, another tab):
+  // rows missing from it are rows this copy never had, not rows the user deleted → delete nothing.
+  const stale = !!prev && Number(version) !== (prev.version || 0);
+  if (!stale && (item.kind === 'leads' || item.kind === 'ads')) {
     const { key } = colsFor(item.kind);
     const pick = (list) => (list || []).find((s) => s.id === 'live') || (list || [])[0];
     const beforeSheet = pick(prev?.sheets);
@@ -298,12 +423,12 @@ export async function saveSheet(item, sheets) {
       removedKeys = [...new Set([...removedKeys, ...deleted])];
     }
   }
-  await saveSheetDoc(item, sheets, removedKeys);
+  const newVersion = await saveSheetDoc(item, sheets, removedKeys);
   if (deleted.length) {
     if (item.kind === 'ads') await removeAdsFromWorkspace(item.workspaceId, deleted);
     else await deleteLeads(item.workspaceId, deleted, { skipSheet: item._id });
   }
-  return { deleted: deleted.length };
+  return { deleted: deleted.length, version: newVersion, stale };
 }
 
 // ---------------- deleting (always inside one workspace) ----------------
@@ -335,13 +460,13 @@ async function dropRowsFromSheets(ws, header, values, skipId) {
   const items = await col('items').find({ workspaceId: ws, type: 'sheet' }).project({ _id: 1 }).toArray();
   for (const it of items) {
     if (skipId && String(it._id) === String(skipId)) continue;
-    const doc = await col('sheets').findOne({ _id: it._id });
+    const doc = await sheetDoc(it._id);
     if (!doc) continue;
     let changed = 0;
     for (const s of doc.sheets || []) changed += dropRows(s, header, set);
     if (changed) {
       const live = doc.sheets.find((s) => s.id === 'live') || doc.sheets[0];
-      await col('sheets').updateOne({ _id: it._id }, { $set: { sheets: doc.sheets, rowCount: filledRows(live).size, updatedAt: new Date() } });
+      await storeWorkbook(it._id, doc.sheets, { rowCount: filledRows(live).size });
     }
   }
 }
@@ -376,7 +501,7 @@ export async function deleteProject(ws, pid) {
   const ads = await col('ads').updateMany({ projectIds: pid }, { $pull: { projectIds: pid } });
   const jobs = await col('jobs').deleteMany({ workspaceId: ws, projectId: pid });
   const items = await col('items').find({ projectId: pid, workspaceId: ws }).project({ _id: 1 }).toArray();
-  await col('sheets').deleteMany({ _id: { $in: items.map((i) => i._id) } });
+  await deleteSheetDocs(items.map((i) => i._id));
   await col('items').deleteMany({ projectId: pid, workspaceId: ws });
   await col('projects').deleteOne({ _id: pid });
   return { name: project.name, leads: removed.leads, ads: ads.modifiedCount, searches: jobs.deletedCount };
@@ -388,7 +513,7 @@ export async function deleteWorkspaceData(ws) {
   await stopPages(ws);
   await col('ads').updateMany({ projectIds: { $in: projectIds } }, { $pull: { projectIds: { $in: projectIds } } });
   const items = await col('items').find({ workspaceId: ws }).project({ _id: 1 }).toArray();
-  await col('sheets').deleteMany({ _id: { $in: items.map((i) => i._id) } });
+  await deleteSheetDocs(items.map((i) => i._id));
   await Promise.all([
     col('items').deleteMany({ workspaceId: ws }),
     col('projects').deleteMany({ workspaceId: ws }),

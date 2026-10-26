@@ -80,6 +80,8 @@ export function analyzeLink(url) {
   } catch {
     return out;
   }
+  // links come from strangers' pages — only web links (no javascript:, data: …)
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return out;
   const host = u.hostname.toLowerCase();
   if (/(^|\.)l\.facebook\.com$/.test(host) || (host.endsWith('facebook.com') && u.pathname === '/l.php')) {
     const inner = u.searchParams.get('u');
@@ -121,8 +123,10 @@ export function analyzeLink(url) {
 }
 
 // ---------- facebook urls ----------
+// the page's own link — never a WhatsApp/website link that slipped into pageUrl (then: by its id)
 export const pageLink = (l) =>
-  l.pageUrl || (/^\d+$/.test(l.pageId) ? `https://www.facebook.com/${l.pageId}` : '');
+  (/^https?:\/\/([a-z0-9-]+\.)*(facebook|fb|instagram)\.com\//i.test(String(l.pageUrl || '')) ? l.pageUrl : '') ||
+  (/^\d+$/.test(l.pageId) ? `https://www.facebook.com/${l.pageId}` : '');
 
 export const pageAdsLink = (pageId) =>
   /^\d+$/.test(pageId)
@@ -131,22 +135,81 @@ export const pageAdsLink = (pageId) =>
 
 export const adLink = (adId) => `https://www.facebook.com/ads/library/?id=${adId}`;
 
-export const adLibraryUrl = (keyword, country) =>
-  `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=${encodeURIComponent(
-    country || 'ALL',
-  )}&is_targeted_country=false&media_type=all&q=${encodeURIComponent(keyword)}&search_type=keyword_unordered`;
+// The Ad Library's own filters and sort, as they go into its link (checked against the live site).
+export const AD_FILTERS = {
+  status: ['active', 'inactive', 'all'],
+  media: ['all', 'image', 'video', 'meme', 'none'],
+  platforms: ['facebook', 'instagram', 'audience_network', 'messenger', 'threads'],
+  sort: ['', 'impressions', 'impressions_asc', 'recent'],
+};
+const SORT_PARAMS = {
+  impressions: ['total_impressions', 'desc'],
+  impressions_asc: ['total_impressions', 'asc'],
+  recent: ['relevancy_monthly_grouped', 'desc'],
+};
+const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')) && !Number.isNaN(Date.parse(d));
+
+/** Only the filter values the Ad Library knows; anything else falls back to its default. Empty = all defaults. */
+export function cleanAdFilters(f) {
+  if (!f || typeof f !== 'object') return {};
+  const out = {};
+  if (AD_FILTERS.status.includes(f.status) && f.status !== 'active') out.status = f.status;
+  if (AD_FILTERS.media.includes(f.media) && f.media !== 'all') out.media = f.media;
+  const platforms = uniq((Array.isArray(f.platforms) ? f.platforms : []).filter((p) => AD_FILTERS.platforms.includes(p)));
+  if (platforms.length && platforms.length < AD_FILTERS.platforms.length) out.platforms = platforms;
+  const languages = uniq((Array.isArray(f.languages) ? f.languages : []).map((l) => String(l).toLowerCase()).filter((l) => /^[a-z]{2,3}$/.test(l))).slice(0, 10);
+  if (languages.length) out.languages = languages;
+  if (isDay(f.from)) out.from = f.from;
+  if (isDay(f.to)) out.to = f.to;
+  if (out.from && out.to && out.from > out.to) [out.from, out.to] = [out.to, out.from];
+  if (f.exact === true) out.exact = true;
+  if (SORT_PARAMS[f.sort]) out.sort = f.sort;
+  return out;
+}
+
+export const adLibraryUrl = (keyword, country, filters = {}) => {
+  const f = cleanAdFilters(filters);
+  const q = [
+    `active_status=${f.status || 'active'}`,
+    'ad_type=all',
+    `country=${encodeURIComponent(country || 'ALL')}`,
+    'is_targeted_country=false',
+    `media_type=${f.media || 'all'}`,
+    `q=${encodeURIComponent(keyword)}`,
+    `search_type=${f.exact ? 'keyword_exact_phrase' : 'keyword_unordered'}`,
+  ];
+  (f.platforms || []).forEach((p, i) => q.push(`publisher_platforms[${i}]=${p}`));
+  (f.languages || []).forEach((l, i) => q.push(`content_languages[${i}]=${l}`));
+  if (f.from) q.push(`start_date[min]=${f.from}`);
+  if (f.to) q.push(`start_date[max]=${f.to}`);
+  if (f.sort) q.push(`sort_data[mode]=${SORT_PARAMS[f.sort][0]}`, `sort_data[direction]=${SORT_PARAMS[f.sort][1]}`);
+  return `https://www.facebook.com/ads/library/?${q.join('&')}`;
+};
+
+/** The ?id= of a profile.php link (a broken link must not throw — the page would stay stuck in the queue). */
+const profileId = (u, fallback) => {
+  try {
+    return new URL(u, 'https://www.facebook.com').searchParams.get('id') || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+// the stored page link, only if it really is a Facebook/Instagram link (else the page is reached by its id)
+const ownUrl = (lead) =>
+  /^https?:\/\/([a-z0-9-]+\.)*(facebook|fb|instagram)\.com\//i.test(String(lead.pageUrl || '')) ? lead.pageUrl.replace(/[#].*$/, '') : '';
 
 export function mainUrl(lead) {
-  const u = (lead.pageUrl || '').replace(/[#].*$/, '');
-  if (/profile\.php/.test(u)) return `https://www.facebook.com/profile.php?id=${new URL(u).searchParams.get('id') || lead.pageId}`;
-  if (u) return u.replace(/\?.*$/, '');
+  const u = ownUrl(lead);
+  if (/profile\.php/.test(u)) return `https://www.facebook.com/profile.php?id=${profileId(u, lead.pageId)}`;
+  if (/^https?:\/\//i.test(u)) return u.replace(/\?.*$/, '');
   return /^\d+$/.test(lead.pageId) ? `https://www.facebook.com/${lead.pageId}` : '';
 }
 
 export function aboutUrl(lead) {
-  const u = (lead.pageUrl || '').replace(/[#].*$/, '');
+  const u = ownUrl(lead);
   if (/profile\.php/.test(u)) {
-    const id = new URL(u).searchParams.get('id') || lead.pageId;
+    const id = profileId(u, lead.pageId);
     return `https://www.facebook.com/profile.php?id=${id}&sk=about`;
   }
   if (u) return u.replace(/\?.*$/, '').replace(/\/+$/, '') + '/about';

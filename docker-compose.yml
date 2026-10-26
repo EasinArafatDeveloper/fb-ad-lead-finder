@@ -10,10 +10,12 @@ services:
     environment:
       TZ: Asia/Dhaka
       PORT: 4000
+      # room for very big sheets (a workbook is unpacked in memory while it is opened or saved)
+      NODE_OPTIONS: --max-old-space-size=2048
     ports: ["127.0.0.1:3002:4000"]
     restart: unless-stopped
     networks: [db, proxy]
-    mem_limit: 768m
+    mem_limit: 3g
     cpus: 1.5
     logging:
       driver: json-file
