@@ -291,6 +291,13 @@ r.get('/next-scrape', ah(async (req) => {
   const parallel = onServer || pool.length > 1 ? 1 : s.parallel;
   if (!s.running) return { lead: null, reason: s.pausedReason || 'paused', parallel };
   if (Number(req.query.slot) >= parallel) return { lead: null, reason: 'slot-off', parallel };
+  // a customer's Chrome that got a login wall / checkpoint rests on its own (customerRest) — nobody else waits
+  if (req.workerWs && req.pcId) {
+    const pc = await getPc(req.pcId);
+    if (pc?.readRestUntil && new Date(pc.readRestUntil) > new Date()) {
+      return { lead: null, reason: `waiting until ${fmtTime(pc.readRestUntil)} (${pc.readRestWhy || 'Facebook login wall'})`, parallel, proxy: OFF };
+    }
+  }
   if (s.cooldownUntil && new Date(s.cooldownUntil) > new Date()) {
     return { lead: null, reason: `waiting until ${fmtTime(s.cooldownUntil)} (Facebook login wall)`, parallel };
   }
@@ -322,9 +329,36 @@ r.get('/next-scrape', ah(async (req) => {
   };
 }));
 
+// ---------------- a customer's own extension (ext_ key) ----------------
+// Pages are shared by every customer, and pausing/cooldowns affect the whole service. So a customer's
+// extension may only report on a page its own Chrome is reading right now (given to it by /next-scrape),
+// and its login walls / checkpoints rest only that computer — never the team's readers or the service.
+export const CUSTOMER_WALL_REST_MIN = 30;
+export const CUSTOMER_BLOCK_REST_MIN = 60;
+
+/** True when this request may report on the page: the team's key always; a customer only for its own claim. */
+async function ownsClaim(req, pageId) {
+  if (!req.workerWs) return true;
+  if (!pageId) return false;
+  const p = await col('pages').findOne(
+    { pageId: String(pageId), scrapeStatus: 'working', claimedBy: 'chrome', claimedFor: req.workerWs },
+    { projection: { _id: 1 } },
+  );
+  return !!p;
+}
+
+/** This customer's computer stops reading pages for a while (shown in its popup as the reason). */
+async function customerRest(req, minutes, why) {
+  const until = new Date(Date.now() + minutes * 60e3);
+  if (req.pcId) await col('pcs').updateOne({ _id: req.pcId }, { $set: { readRestUntil: until, readRestWhy: why } }, { upsert: true });
+  return until;
+}
+
 r.post('/result', ah(async (req) => {
   const { pageId, result, proxyId } = req.body || {};
-  await recordResult(String(pageId), result || {}, proxyId);
+  if (!(await ownsClaim(req, pageId))) return { ok: false, ignored: 'not a page this extension is reading' };
+  // a customer's Chrome never has the team's proxies
+  await recordResult(String(pageId), result || {}, req.workerWs ? null : proxyId);
   return { ok: true };
 }));
 
@@ -354,7 +388,18 @@ const fmtTime = (d) => new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit'
  * logging in). We don't push through it: the worker waits — 30 min, then 60, 120, up to 4 h if it keeps
  * happening — and continues by itself. A page that keeps asking for a login on its own is skipped.
  */
-r.post('/wall', ah(async (req) => recordWall(String(req.body?.pageId || ''), String(req.body?.proxyId || ''), { fromBrowser: true })));
+r.post('/wall', ah(async (req) => {
+  const pageId = String(req.body?.pageId || '');
+  if (req.workerWs) {
+    if (!(await ownsClaim(req, pageId))) return { ok: false, ignored: 'not a page this extension is reading', until: null };
+    // the page goes back to the queue as usual; only this customer's computer takes the break
+    await wallOnPage(pageId, { pool: proxyPool(await getSettings()).length });
+    const until = await customerRest(req, CUSTOMER_WALL_REST_MIN, 'Facebook login wall');
+    await log('warn', `Login wall in a customer's Chrome (${req.workerUser?.email || req.workerWs}) — that computer waits ${CUSTOMER_WALL_REST_MIN} min`);
+    return { ok: true, until };
+  }
+  return recordWall(pageId, String(req.body?.proxyId || ''), { fromBrowser: true });
+}));
 
 /** Returns { until } — when the worker continues (null = right away, with the next IP). */
 export async function recordWall(pageId, proxyId, { fromBrowser = false } = {}) {
@@ -394,6 +439,12 @@ export async function recordWall(pageId, proxyId, { fromBrowser = false } = {}) 
 }
 
 r.post('/net-error', ah(async (req) => {
+  if (req.workerWs) {
+    const pageId = String(req.body?.pageId || '');
+    if (!(await ownsClaim(req, pageId))) return { ok: false, ignored: 'not a page this extension is reading' };
+    await recordNetError(pageId, '', String(req.body?.error || 'network error').slice(0, 100));
+    return { ok: true };
+  }
   await recordNetError(String(req.body?.pageId || ''), String(req.body?.proxyId || ''), String(req.body?.error || 'network error').slice(0, 100));
   return { ok: true };
 }));
@@ -413,6 +464,14 @@ export async function recordNetError(pageId, proxyId, error) {
 r.post('/blocked', ah(async (req) => {
   const { pageId, reason } = req.body || {};
   const why = String(reason || 'blocked').slice(0, 200);
+  if (req.workerWs) {
+    // a customer's own Facebook / internet trouble: that computer rests, the service keeps running
+    if (pageId && (await ownsClaim(req, pageId))) await releasePage(String(pageId));
+    const until = await customerRest(req, CUSTOMER_BLOCK_REST_MIN, why);
+    await log('warn', `Customer's Chrome stopped (${req.workerUser?.email || req.workerWs}): ${why} — that computer rests ${CUSTOMER_BLOCK_REST_MIN} min`);
+    await activity('paused', `This computer stopped reading pages: ${why}. It tries again by itself at ${fmtTime(until)}.`, { workspaceId: req.workerWs });
+    return { ok: true, until };
+  }
   if (pageId) await releasePage(String(pageId));
   await updateSettings({ running: false, pausedReason: why });
   await log('error', `Paused: ${why}`);

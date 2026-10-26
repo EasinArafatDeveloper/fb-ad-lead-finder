@@ -195,6 +195,9 @@ try {
   ok(isPrivateIp('172.18.0.5') && isPrivateIp('169.254.169.254') && isPrivateIp('::1') && !isPrivateIp('8.8.8.8'), 'private IP detection');
   ok((await websiteContacts('http://mongodb:27017')).emails.length === 0, 'website crawler refuses an internal host');
   ok((await req('PUT', '/api/settings', { cookie: b.cookie, body: { workspace: { sheetUrl: 'http://mongodb:27017/' } } })).status === 400, 'Sheet URL must be script.google.com');
+  // the big sheet body is only read after the login check (a broken body without login → 401, not a parse error)
+  const anonSheet = await fetch(`${BASE}/api/sheets/000000000000000000000000`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{not json' + ' '.repeat(2_000_000) });
+  ok(anonSheet.status === 401, 'sheet save without login is refused before the body is read');
 
   // ---------- logout ----------
   await req('POST', '/api/auth/logout', { cookie: b.cookie });

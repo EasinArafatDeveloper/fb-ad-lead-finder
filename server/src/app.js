@@ -70,6 +70,44 @@ function securityHeaders(_req, res, next) {
   next();
 }
 
+// A saved workbook can be hundreds of MB once unpacked. Only a logged-in user may send one, and only a few are
+// unpacked at the same time (the others wait their turn) — so a burst of big saves can't run the server out of memory.
+const SHEET_SAVES_AT_ONCE = 3;
+const SHEET_SAVES_WAITING = 50;
+function sheetSaveGate() {
+  let running = 0;
+  const waiting = [];
+  const done = () => {
+    running--;
+    const next = waiting.shift();
+    if (next) next();
+  };
+  return (req, res, next) => {
+    if (['GET', 'HEAD'].includes(req.method)) return next();
+    const go = () => {
+      // the browser gave up while waiting: no turn taken, the next one goes
+      if (res.destroyed || req.socket?.destroyed) {
+        const after = waiting.shift();
+        if (after) after();
+        return;
+      }
+      running++;
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        done();
+      };
+      res.on('finish', release);
+      res.on('close', release);
+      next();
+    };
+    if (running < SHEET_SAVES_AT_ONCE) return go();
+    if (waiting.length >= SHEET_SAVES_WAITING) return res.status(503).json({ error: 'The server is busy saving sheets. Try again in a minute.' });
+    waiting.push(go);
+  };
+}
+
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
@@ -78,7 +116,8 @@ export function createApp() {
   app.use(securityHeaders);
   // big bodies only where they are needed: a saved workbook and the ads the extension sends
   // a workbook has no size limit: the browser sends it gzipped, this is the size once unpacked
-  app.use('/api/sheets', express.json({ limit: '400mb' }));
+  // the login is checked BEFORE the big body is read (a stranger can't make the server unpack 400 MB)
+  app.use('/api/sheets', dbReady, loadUser, sameOrigin, requireUser, requireVerified, sheetSaveGate(), express.json({ limit: '400mb' }));
   app.use(['/api/worker', '/api/dev'], express.json({ limit: '25mb' }));
   app.use(express.json({ limit: '1mb' }));
 

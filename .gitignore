@@ -6,3 +6,5 @@ node_modules/
 dashboard/dist/
 dist/
 ADMIN_LOGIN.txt
+# local debug helpers
+.inspect-tmp.sh

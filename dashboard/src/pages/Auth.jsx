@@ -45,7 +45,8 @@ export default function Auth({ mode, onLogin }) {
     setSent(false);
   }, [mode]);
 
-  const next = params.get('next') && params.get('next').startsWith('/') ? params.get('next') : '/dashboard';
+  // only a path on this site: "//evil.com" or "/\evil.com" would leave it (open redirect)
+  const next = /^\/(?![/\\])/.test(params.get('next') || '') ? params.get('next') : '/dashboard';
   if (me && (mode === 'login' || mode === 'signup')) return <Navigate to={next} replace />;
 
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));

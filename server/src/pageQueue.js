@@ -59,10 +59,12 @@ export function resetTurns() {
   waitingCache.clear();
 }
 
-const take = async (by, filter) => {
+// claimedFor: the customer whose own Chrome took the page (null = the team's readers) — that customer's
+// extension may only report on pages it was given (worker.js ownsClaim)
+const take = async (by, filter, claimedFor = null) => {
   const p = await col('pages').findOneAndUpdate(
     filter,
-    { $set: { scrapeStatus: 'working', claimedAt: new Date(), claimedBy: by } },
+    { $set: { scrapeStatus: 'working', claimedAt: new Date(), claimedBy: by, claimedFor } },
     { sort: { createdAt: 1 }, returnDocument: 'after' },
   );
   if (p) await syncLeads([p.pageId]);
@@ -81,7 +83,7 @@ export async function claimPage(by, { forChrome, wantedBy } = {}) {
   if (forChrome === false) base.needsBrowser = { $ne: true };
   const shares = await fundedShares();
   // a customer's own Chrome reads only the pages that customer is waiting for
-  if (wantedBy) return shares.has(String(wantedBy)) ? take(by, { ...base, wantedBy }) : null;
+  if (wantedBy) return shares.has(String(wantedBy)) ? take(by, { ...base, wantedBy }, wantedBy) : null;
   const kind = String(forChrome);
   const lines = new Set(await waitingLines(base, kind, shares));
   while (lines.size) {
@@ -109,7 +111,7 @@ export async function claimPage(by, { forChrome, wantedBy } = {}) {
 export async function releasePage(pageId, { inc, set } = {}) {
   const p = await col('pages').findOneAndUpdate(
     { pageId: String(pageId), scrapeStatus: 'working' },
-    { $set: { scrapeStatus: 'pending', ...(set || {}) }, $unset: { claimedBy: '' }, ...(inc ? { $inc: inc } : {}) },
+    { $set: { scrapeStatus: 'pending', ...(set || {}) }, $unset: { claimedBy: '', claimedFor: '' }, ...(inc ? { $inc: inc } : {}) },
     { returnDocument: 'after' },
   );
   await syncLeads([String(pageId)]);
@@ -120,7 +122,7 @@ export async function releasePage(pageId, { inc, set } = {}) {
 export async function failPage(pageId, reason, { name } = {}) {
   await col('pages').updateOne(
     { pageId: String(pageId) },
-    { $set: { scrapeStatus: 'failed', lastError: String(reason).slice(0, 300), updatedAt: new Date() }, $unset: { claimedBy: '', needsBrowser: '' } },
+    { $set: { scrapeStatus: 'failed', lastError: String(reason).slice(0, 300), updatedAt: new Date() }, $unset: { claimedBy: '', claimedFor: '', needsBrowser: '' } },
   );
   await syncLeads([String(pageId)], { touch: true });
   await pageActivity(String(pageId), 'failed', `${name || pageId} — ${reason}`);
@@ -168,7 +170,7 @@ export async function janitor() {
     .project({ pageId: 1 })
     .toArray();
   if (stale.length) {
-    await col('pages').updateMany({ pageId: { $in: stale.map((p) => p.pageId) } }, { $set: { scrapeStatus: 'pending' }, $unset: { claimedBy: '' } });
+    await col('pages').updateMany({ pageId: { $in: stale.map((p) => p.pageId) } }, { $set: { scrapeStatus: 'pending' }, $unset: { claimedBy: '', claimedFor: '' } });
     await syncLeads(stale.map((p) => p.pageId));
   }
   const forgotten = await col('pages')

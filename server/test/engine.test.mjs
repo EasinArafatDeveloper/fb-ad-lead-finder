@@ -1060,6 +1060,63 @@ test("A customer's extension sees only its own account's numbers — never the s
   }
 });
 
+test("A customer's extension can only report on the page its own Chrome is reading — it can't pause the service, start a cooldown or change other pages", async () => {
+  await B.ensurePlans();
+  await settings(); // a proxy list → pages are read on the server; Chrome gets only the ones that need it
+  const c = await customer(40, { plan: 'starter' });
+  const { createExtensionKey } = await import('../src/auth.js');
+  const key = await createExtensionKey(c.user, 'test');
+  process.env.WORKER_KEY = process.env.WORKER_KEY || 'test-worker-key';
+  const pcId = '99999999-2222-4333-8444-aaaaaaaaaaaa';
+  await col('pages').insertMany([
+    { pageId: 'cp1', pageName: 'Customer page', pageUrl: 'https://www.facebook.com/cp1/', scrapeStatus: 'pending', needsBrowser: true, wantedBy: [c.ws], retries: 0, phones: [], emails: [], createdAt: new Date() },
+    { pageId: 'xp1', pageName: 'Someone else', pageUrl: 'https://www.facebook.com/xp1/', scrapeStatus: 'working', claimedBy: 'chrome', claimedFor: null, claimedAt: new Date(), retries: 0, phones: [], emails: [], createdAt: new Date() },
+  ]);
+  await col('leads').insertOne({ workspaceId: c.ws, pageId: 'cp1', status: 'New', overrides: [], createdAt: new Date(), updatedAt: new Date() });
+  const { createApp } = await import('../src/app.js');
+  const srv = createApp().listen(0);
+  const call = async (k, path, body) => {
+    const r = await fetch(`http://127.0.0.1:${srv.address().port}/api/worker${path}`, {
+      method: body ? 'POST' : 'GET',
+      headers: { 'x-api-key': k, 'x-ext-version': '3.6.0', 'x-ext-pc': pcId, 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return r.json();
+  };
+  try {
+    // somebody else's page: every report is ignored
+    const fake = await call(key, '/result', { pageId: 'xp1', result: { phones: ['+8801999999999'] } });
+    assert.equal(fake.ok, false, 'fake result refused');
+    assert.deepEqual((await page('xp1')).phones, [], 'the shared page is untouched');
+    assert.equal((await call(key, '/wall', { pageId: 'xp1' })).ok, false);
+    assert.equal((await page('xp1')).scrapeStatus, 'working', 'not released by a stranger');
+    assert.equal((await call(key, '/net-error', { pageId: 'xp1', error: 'x' })).ok, false);
+    assert.equal((await page('xp1')).scrapeStatus, 'working');
+    assert.ok(!(await getSettings()).browserCooldownUntil, 'no cooldown for everybody');
+
+    // its own page: given by /next-scrape, then read normally
+    const n = await call(key, '/next-scrape?slot=0');
+    assert.equal(n.lead?.pageId, 'cp1', "the customer's Chrome gets its own page");
+    assert.equal(String((await page('cp1')).claimedFor), String(c.ws));
+    assert.equal((await call(key, '/result', { pageId: 'cp1', result: ok().result })).ok, true);
+    assert.equal((await page('cp1')).scrapeStatus, 'done', 'its own page is saved as before');
+
+    // a checkpoint in the customer's own Facebook: only that computer rests, the service keeps running
+    await call(key, '/blocked', { reason: 'Facebook checkpoint / temporary block' });
+    assert.equal((await getSettings()).running, true, 'the service is NOT paused');
+    const wait = await call(key, '/next-scrape?slot=0');
+    assert.equal(wait.lead, null);
+    assert.match(wait.reason, /waiting until/, 'that computer rests');
+
+    // the team's own key works exactly as before: a checkpoint pauses the worker
+    await call(process.env.WORKER_KEY, '/blocked', { reason: 'team checkpoint' });
+    assert.equal((await getSettings()).running, false, "the team's computer still pauses the worker");
+  } finally {
+    srv.close();
+    await col('pcs').deleteOne({ _id: pcId });
+  }
+});
+
 test('Ad insights without AI: hook, offers, prices from the ad text; the page gets its longest-running hook; filters, sheets and the project page use them', async () => {
   const I = await import('../src/insights.js');
   const { ingestAds, buildFilter } = await import('../src/leads.js');

@@ -1,5 +1,7 @@
 import dns from 'node:dns/promises';
+import dnsCb from 'node:dns';
 import net from 'node:net';
+import { Agent, fetch } from 'undici';
 import { BD_PHONE_RE, EMAIL_RE, cleanEmails, uniqPhones } from './util.js';
 import { detectPlatform } from './adFacts.js';
 
@@ -48,6 +50,20 @@ async function publicUrl(href) {
   return addrs.length && !addrs.some(isPrivateIp) ? u : null;
 }
 
+// The address is checked again at the moment of connecting: a hostile DNS server could answer the check above
+// with a public IP and the real connection with an internal one ("DNS rebinding").
+function safeLookup(hostname, options, cb) {
+  dnsCb.lookup(hostname, { ...options, all: true }, (err, addrs) => {
+    if (err) return cb(err);
+    if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) {
+      return cb(Object.assign(new Error(`${hostname} points to a private address`), { code: 'EBLOCKED' }));
+    }
+    if (options?.all) return cb(null, addrs);
+    cb(null, addrs[0].address, addrs[0].family);
+  });
+}
+const publicOnly = new Agent({ connect: { lookup: safeLookup } });
+
 async function fetchText(href, timeoutMs = 12000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -57,7 +73,7 @@ async function fetchText(href, timeoutMs = 12000) {
     for (let hop = 0; hop < 5; hop++) {
       const u = await publicUrl(url);
       if (!u) return '';
-      const r = await fetch(u, { signal: ctrl.signal, redirect: 'manual', headers: { 'user-agent': UA } });
+      const r = await fetch(u, { signal: ctrl.signal, redirect: 'manual', headers: { 'user-agent': UA }, dispatcher: publicOnly });
       if (r.status >= 300 && r.status < 400) {
         const loc = r.headers.get('location');
         if (!loc) return '';
