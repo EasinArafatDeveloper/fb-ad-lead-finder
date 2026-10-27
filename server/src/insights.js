@@ -149,7 +149,7 @@ export async function insightsAfterIngest(adIds) {
 const daysSince = (d) => (d ? Math.max(0, Math.floor((Date.now() - Date.parse(d)) / 86400e3)) : 0);
 
 const AD_FIELDS = { adId: 1, pageId: 1, pageName: 1, startDate: 1, format: 1, cta: 1, ctaType: 1, linkUrl: 1, ins: 1 };
-const HOOK_PAGES_MAX = 1000; // "used by N advertisers" counts up to this many per hook (memory stays small)
+const HOOK_PAGES_MAX = 100000; // "used by N advertisers" per hook (a cap only so one hook can't hold everything)
 
 /**
  * Insights over any number of ads, added one at a time (a project's few hundred, or every ad of all the leads —
@@ -159,6 +159,8 @@ function adTally() {
   let n = 0;
   let analysed = 0;
   let longRunning = 0;
+  let adsWithOffer = 0;
+  let adsWithPrice = 0;
   const byHook = new Map();
   const prices = [];
   const offers = new Map(OFFER_NAMES.map((o) => [o, 0]));
@@ -181,6 +183,8 @@ function adTally() {
       analysed++;
       if (d >= 30) longRunning++;
       bump(languages, a.ins.lang);
+      if (a.ins.offers?.length) adsWithOffer++;
+      if (a.ins.prices?.length) adsWithPrice++;
       for (const o of a.ins.offers || []) if (offers.has(o)) offers.set(o, offers.get(o) + 1);
       for (const x of a.ins.prices || []) prices.push(x);
       // hooks: the same opening line used in several ads counts once, ranked by how long its ads have run
@@ -193,52 +197,95 @@ function adTally() {
         byHook.set(k, cur);
       }
     },
-    result({ allHooks = false } = {}) {
+    /** Everything — every hook, every advertiser; nothing cut. The page shows parts of the long lists (insightsView). */
+    result() {
       const pct = (k) => (n ? Math.round((k * 100) / n) : 0);
       const share = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ name: k, ads: v, pct: pct(v) }));
-      const hooks = [...byHook.values()].sort((a, b) => b.days - a.days || b.ads - a.ads);
+      const hooks = [...byHook.values()].sort((a, b) => b.days - a.days || b.ads - a.ads).map(({ pages: pg, ...h }) => ({ ...h, days: Math.max(0, h.days), pages: pg.size }));
       prices.sort((a, b) => a - b);
       const q = (p) => (prices.length ? prices[Math.min(prices.length - 1, Math.floor(p * prices.length))] : null);
       return {
         ads: n,
         analysed,
         longRunning,
-        hookCount: hooks.length,
-        hooks: (allHooks ? hooks : hooks.slice(0, 60)).map(({ pages: pg, ...h }) => ({ ...h, days: Math.max(0, h.days), pages: pg.size })),
-        offers: OFFER_NAMES.map((o) => ({ offer: o, ads: offers.get(o), pct: pct(offers.get(o)) })).sort((a, b) => b.ads - a.ads),
+        adsWithOffer,
+        adsWithPrice,
+        hooks,
+        // each offer: share of all the ads, and of the ads that name any offer at all
+        offers: OFFER_NAMES.map((o) => ({ offer: o, ads: offers.get(o), pct: pct(offers.get(o)), pctOfOffers: adsWithOffer ? Math.round((offers.get(o) * 100) / adsWithOffer) : 0 })).sort((a, b) => b.ads - a.ads),
         prices: prices.length ? { count: prices.length, min: prices[0], low: q(0.25), median: q(0.5), high: q(0.75), max: prices[prices.length - 1] } : null,
         formats: share(formats),
         orderVia: share(orderVia),
         languages: share(languages),
-        advertisers: pages.size,
-        topByAds: [...pages.values()].sort((a, b) => b.ads - a.ads).slice(0, allHooks ? 100 : 10),
-        topByDays: [...pages.values()].sort((a, b) => b.days - a.days).slice(0, allHooks ? 100 : 10),
+        advertisers: [...pages.values()].sort((a, b) => b.ads - a.ads || b.days - a.days),
       };
     },
   };
 }
 
-/** "allHooks": every hook (the Excel report), else the top 60 (the page). */
-export async function projectInsights(projectId, { allHooks = false } = {}) {
+/** A project's insights, complete (every hook and advertiser). */
+export async function projectInsights(projectId) {
   const t = adTally();
   for await (const a of col('ads').find({ projectIds: projectId }).project(AD_FIELDS)) t.add(a);
-  return t.result({ allHooks });
+  return t.result();
+}
+
+// ---------------- what the page gets: everything, the two long lists in pages ----------------
+export const FIRST_ROWS = 25;
+
+/**
+ * The insights for the page: every number and every short list (offers, formats, categories …) whole; of the two
+ * long lists (hooks, advertisers) the first rows and how many there are — the rest come with insightsList.
+ */
+export function insightsView(full) {
+  const { hooks, advertisers, ...rest } = full;
+  return {
+    ...rest,
+    hookCount: hooks.length,
+    hooks: hooks.slice(0, FIRST_ROWS),
+    longHookCount: hooks.filter((h) => h.days >= 30).length,
+    advertiserCount: advertisers.length,
+    advertisers: advertisers.slice(0, FIRST_ROWS),
+  };
+}
+
+/**
+ * One part of a long list: kind 'hooks' (newest-running first; minDays 30 = only the long-running ones) or
+ * 'advertisers' (sort 'ads' | 'days'); q searches the text / name. Returns { rows, total, page, per }.
+ */
+export function insightsList(full, kind, { page = 1, per = 50, q = '', minDays = 0, sort = 'ads' } = {}) {
+  const needle = String(q || '').trim().toLowerCase();
+  let rows;
+  if (kind === 'hooks') {
+    rows = full.hooks.filter((h) => h.days >= (Number(minDays) || 0) && (!needle || h.hook.toLowerCase().includes(needle) || String(h.pageName || '').toLowerCase().includes(needle)));
+  } else if (kind === 'advertisers') {
+    rows = full.advertisers.filter((a) => !needle || String(a.pageName || a.pageId).toLowerCase().includes(needle));
+    if (sort === 'days') rows = [...rows].sort((a, b) => b.days - a.days || b.ads - a.ads);
+  } else return { rows: [], total: 0, page: 1, per };
+  const size = Math.min(200, Math.max(1, Number(per) || 50));
+  const p = Math.max(1, Number(page) || 1);
+  return { rows: rows.slice((p - 1) * size, p * size), total: rows.length, page: p, per: size };
 }
 
 // ---------------- All Leads: the same insights over every ad of the leads in view ----------------
 const LEAD_CHUNK = 5000;
 const leadCache = new Map(); // workspace + filter → { at, data } — a big workspace takes a few seconds
 export const LEADS_INSIGHTS_TTL_MS = 10 * 60e3;
+const LEAD_CACHE_MAX = 6; // the complete results are big (every hook): only the last few filters are kept
 
 /**
- * The ad insights of the leads matching `filter` (leads.js buildFilter — always one workspace): their ads, plus
- * what the leads themselves say (how many have ads at all, their categories). Cached for 10 minutes per filter;
- * `fresh` recalculates.
+ * The ad insights of the leads matching `filter` (leads.js buildFilter — always one workspace): every ad of them,
+ * plus what the leads themselves say (how many have ads at all, every category). Complete — nothing cut.
+ * Kept 10 minutes per filter (the page and its "show more" read the same result); `fresh` recalculates.
  */
-export async function leadsInsights(ws, filter, { allHooks = false, fresh = false } = {}) {
-  const key = `${ws}|${JSON.stringify(filter)}|${allHooks}`;
+export async function leadsInsights(ws, filter, { fresh = false } = {}) {
+  const key = `${ws}|${JSON.stringify(filter)}`;
   const hit = leadCache.get(key);
-  if (!fresh && hit && Date.now() - hit.at < LEADS_INSIGHTS_TTL_MS) return { ...hit.data, cached: true };
+  if (!fresh && hit && Date.now() - hit.at < LEADS_INSIGHTS_TTL_MS) {
+    leadCache.delete(key);
+    leadCache.set(key, hit); // most recently used last
+    return { ...hit.data, cached: true };
+  }
   const t = adTally();
   const categories = new Map();
   let leads = 0;
@@ -263,13 +310,15 @@ export async function leadsInsights(ws, filter, { allHooks = false, fresh = fals
   }
   await flush();
   const data = {
-    ...t.result({ allHooks }),
+    ...t.result(),
     leads,
     leadsWithAds: withAds,
-    categories: [...categories.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([name, n]) => ({ name, leads: n, pct: leads ? Math.round((n * 100) / leads) : 0 })),
+    // every category, biggest first
+    categories: [...categories.entries()].sort((a, b) => b[1] - a[1]).map(([name, n]) => ({ name, leads: n, pct: leads ? Math.round((n * 100) / leads) : 0 })),
     at: new Date(),
   };
-  if (leadCache.size > 200) leadCache.clear();
+  leadCache.delete(key);
   leadCache.set(key, { at: Date.now(), data });
+  while (leadCache.size > LEAD_CACHE_MAX) leadCache.delete(leadCache.keys().next().value);
   return data;
 }

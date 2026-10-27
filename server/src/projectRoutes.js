@@ -2,8 +2,8 @@ import express from 'express';
 import ExcelJS from 'exceljs';
 import { activity, col, httpError } from './db.js';
 import { adLibraryUrl, cleanAdFilters } from './util.js';
-import { projectInsights } from './insights.js';
-import { insightsWorkbook, sendWorkbook } from './insightsExcel.js';
+import { insightsList, insightsView, projectInsights } from './insights.js';
+import { sendInsightsWorkbook } from './insightsExcel.js';
 import { clampMaxAds, getSettings } from './settings.js';
 import { accountOf, requirePerk } from './billing.js';
 import { checkSearchQuota } from './routes.js';
@@ -106,7 +106,15 @@ r.delete('/projects/:id', ah(async (req, res) => {
 r.get('/projects/:id/insights', ah(async (req, res) => {
   const p = await projectOf(req, req.params.id);
   if (!p) return notFound(res, 'Project');
-  return { project: { id: String(p._id), name: p.name, keyword: p.keyword, country: p.country }, ...(await projectInsights(p._id)) };
+  return { project: { id: String(p._id), name: p.name, keyword: p.keyword, country: p.country }, ...insightsView(await projectInsights(p._id)) };
+}));
+
+/** More of a long list (every hook / every advertiser), page by page: ?kind=hooks|advertisers&page&per&find&minDays&sort */
+r.get('/projects/:id/insights/list', ah(async (req, res) => {
+  const p = await projectOf(req, req.params.id);
+  if (!p) return notFound(res, 'Project');
+  const { kind, page, per, find, minDays, sort } = req.query;
+  return insightsList(await projectInsights(p._id), String(kind), { page, per, q: find, minDays, sort });
 }));
 
 /** The Insights report as an Excel file: a summary and every hook, offer, price, format and top advertiser. */
@@ -114,9 +122,8 @@ r.get('/projects/:id/insights.xlsx', ah(async (req, res) => {
   await requirePerk(req.ws, 'excelExport');
   const p = await projectOf(req, req.params.id);
   if (!p) return notFound(res, 'Project');
-  const d = await projectInsights(p._id, { allHooks: true });
-  const wb = insightsWorkbook(d, [['Project', p.name], ['Keyword', `${p.keyword} (${p.country})`]]);
-  await sendWorkbook(res, wb, `${p.name} - ad insights.xlsx`);
+  const d = await projectInsights(p._id);
+  await sendInsightsWorkbook(res, d, [['Project', p.name], ['Keyword', `${p.keyword} (${p.country})`]], `${p.name} - ad insights.xlsx`);
 }));
 
 /** "Collect more" — run the same keyword search again; new pages land in the same project. */

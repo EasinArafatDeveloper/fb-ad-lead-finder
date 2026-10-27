@@ -1247,13 +1247,29 @@ test('Ad insights without AI: hook, offers, prices from the ad text; the page ge
   assert.equal(all.ads, 4, 'every ad of every lead');
   assert.equal(all.leads, 3);
   assert.equal(all.leadsWithAds, 2, 'the pasted lead has no ads');
-  assert.equal(all.advertisers, 2);
+  assert.equal(all.advertisers.length, 2, 'every advertiser');
   assert.ok(all.offers.find((o) => o.offer === 'EMI').ads === 1);
+  assert.equal(all.adsWithOffer, 4, 'every ad here names an offer');
+  assert.equal(all.offers.find((o) => o.offer === 'EMI').pctOfOffers, 25, '% of the ads that name an offer');
   assert.equal(all.prices.max, 10000);
   assert.deepEqual(all.categories.map((c) => c.name).sort(), ['Electronics', 'Travel agency'], 'categories of the leads (first one each)');
   const one = await I.leadsInsights(WS, buildFilter(WS, { q: 'Other Shop' }), { fresh: true });
   assert.equal(one.ads, 1, 'only the leads in view');
   assert.equal((await I.leadsInsights(WS, buildFilter(WS, { q: 'Other Shop' }))).cached, true, 'kept for 10 minutes');
+
+  // nothing is cut: the page gets every number and the first rows of the long lists, the rest page by page
+  const many = { hooks: Array.from({ length: 130 }, (_, i) => ({ hook: `Hook ${i}`, pageName: i % 2 ? 'Odd shop' : 'Even shop', days: 200 - i, ads: 1 })), advertisers: Array.from({ length: 70 }, (_, i) => ({ pageId: String(i), pageName: `Shop ${i}`, ads: 70 - i, days: i })) };
+  const view = I.insightsView({ ...all, ...many });
+  assert.equal(view.hookCount, 130);
+  assert.equal(view.hooks.length, I.FIRST_ROWS);
+  assert.equal(view.advertiserCount, 70);
+  const pages = [1, 2, 3].map((page) => I.insightsList(many, 'hooks', { page, per: 50 }));
+  assert.deepEqual(pages.map((p) => p.rows.length), [50, 50, 30], 'every hook reachable');
+  assert.equal(new Set(pages.flatMap((p) => p.rows.map((h) => h.hook))).size, 130);
+  assert.equal(I.insightsList(many, 'hooks', { q: 'odd' }).total, 65, 'search the hooks');
+  assert.equal(I.insightsList(many, 'hooks', { minDays: 100 }).total, 101, 'only the long-running ones');
+  assert.equal(I.insightsList(many, 'advertisers', { sort: 'days', per: 1 }).rows[0].pageName, 'Shop 69', 'advertising longest first');
+  assert.equal(I.insightsList(many, 'advertisers', { page: 2, per: 50 }).rows.length, 20);
 
   // an error inside insights never reaches the engine: ingestAds still saves the ads
   const r = await I.insightsAfterIngest(null);
