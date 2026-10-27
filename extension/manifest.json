@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FB Ad Lead Finder",
-  "version": "3.6.0",
+  "version": "3.6.1",
   "description": "Collect active advertisers from the Meta Ad Library into your FB Lead Finder dashboard, with their public business contacts.",
   "permissions": [
     "storage",

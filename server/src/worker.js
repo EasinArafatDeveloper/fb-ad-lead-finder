@@ -51,6 +51,13 @@ export const NORMAL = {
 /** After "slow down" a computer takes no new search for this long (another computer of the account can). */
 export const LIMIT_REST_MS = 30 * 60e3;
 export const paceFor = (pc) => (pc?.gentle === true ? GENTLE : NORMAL);
+/**
+ * How a computer collects the Ad Library (sent with every search; the extension v3.6.1+ follows it):
+ *   'pager'  — asks Facebook for the next page of ads directly (the default; works with the tab in the background)
+ *   'scroll' — scrolls the Ad Library tab like a person and takes the ads Facebook loads (admin: Computers →
+ *              "Collect by scrolling", for a computer kept apart — the tab must stay in front)
+ */
+export const collectModeFor = (pc) => (pc?.scrollCollect === true ? 'scroll' : 'pager');
 export const limitRestMs = (pc) => (pc?.gentle === true ? GENTLE.restAfterLimitMs : LIMIT_REST_MS);
 
 /** Searches whose Ad Library tab went silent: closed with everything collected so far (called every minute). */
@@ -168,7 +175,7 @@ r.get('/next-collect', ah(async (req) => {
   if (!j) return { job: null, reason: 'no-jobs' };
   await activity('collect', `Opened the Ad Library: "${j.keyword}" — collecting ads`, { workspaceId: j.workspaceId, projectId: j.projectId });
   const maxAds = gentle ? Math.min(j.maxAds || s.maxAds, GENTLE.maxAds) : j.maxAds || s.maxAds;
-  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds, minAds: j.minAds || 1, url: j.url, projectId: j.projectId ? String(j.projectId) : null, pace: paceFor(pc) }, closeAdTab: s.closeAdTab };
+  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds, minAds: j.minAds || 1, url: j.url, projectId: j.projectId ? String(j.projectId) : null, pace: paceFor(pc), collectMode: collectModeFor(pc) }, closeAdTab: s.closeAdTab };
 }));
 
 r.post('/manual-job', ah(async (req, res) => {
@@ -197,7 +204,7 @@ r.post('/manual-job', ah(async (req, res) => {
   await activity('collect', `Manual collect from the Ad Library: "${keyword}"`, { workspaceId: ws, projectId: doc.projectId });
   // the same pace as a search from the Dashboard (without it the extension used its own slower one)
   const pc = req.pcId ? await getPc(req.pcId) : null;
-  return { job: { id: String(insertedId), keyword: doc.keyword, country: doc.country, maxAds: doc.maxAds, minAds: doc.minAds, url: doc.url, manual: true, projectId: String(doc.projectId), pace: paceFor(pc) } };
+  return { job: { id: String(insertedId), keyword: doc.keyword, country: doc.country, maxAds: doc.maxAds, minAds: doc.minAds, url: doc.url, manual: true, projectId: String(doc.projectId), pace: paceFor(pc), collectMode: collectModeFor(pc) } };
 }));
 
 r.post('/ads', ah(async (req, res) => {
@@ -273,7 +280,7 @@ r.post('/job/:id/resume', ah(async (req, res) => {
   await activity('collect', `"${j.keyword}" — the Ad Library tab is back, collecting goes on`, { workspaceId: j.workspaceId, projectId: j.projectId });
   const pc = req.pcId ? await getPc(req.pcId) : null;
   const gentle = pc?.gentle === true;
-  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds: gentle ? Math.min(j.maxAds, GENTLE.maxAds) : j.maxAds, minAds: j.minAds || 1, url: j.url, manual: !!j.manual, projectId: j.projectId ? String(j.projectId) : null, pace: paceFor(pc) } };
+  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds: gentle ? Math.min(j.maxAds, GENTLE.maxAds) : j.maxAds, minAds: j.minAds || 1, url: j.url, manual: !!j.manual, projectId: j.projectId ? String(j.projectId) : null, pace: paceFor(pc), collectMode: collectModeFor(pc) } };
 }));
 
 r.post('/collect-done', ah(async (req) => {

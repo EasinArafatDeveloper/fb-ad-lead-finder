@@ -1463,3 +1463,43 @@ test("Paste links: a Page's profile number (in its link, not its Ad Library id) 
   assert.deepEqual(lead.phones, ['+8801811000000'], 'its data at once');
   assert.throws(() => LI.checkLinks(Array.from({ length: LI.LINKS_MAX + 1 }, (_, i) => `https://www.facebook.com/shop${i}`).join('\n')), /At most 500/);
 });
+
+test('Collect by scrolling is per computer: only the computer switched on gets collectMode scroll — the others keep collecting page by page', async () => {
+  await col('pcs').deleteMany({});
+  const { createApp } = await import('../src/app.js');
+  const P = await import('../src/pcs.js');
+  await col('workspaces').updateOne({ _id: WS }, { $set: { plan: 'internal' } }, { upsert: true });
+  const SCROLL_PC = 'eeeeeeee-2222-4333-8444-555555555555';
+  const OTHER_PC = 'ffffffff-2222-4333-8444-555555555555';
+  const srv = createApp().listen(0);
+  const base = `http://127.0.0.1:${srv.address().port}/api/worker`;
+  const H = (pc) => ({ 'x-api-key': process.env.WORKER_KEY || 'test-worker-key', 'x-ext-version': '3.6.1', 'x-ext-pc': pc, 'content-type': 'application/json' });
+  const next = async (pc) => (await fetch(`${base}/next-collect`, { headers: H(pc) })).json();
+  try {
+    await next(SCROLL_PC); // the computer is remembered on its first contact
+    await new Promise((r) => setTimeout(r, 50));
+    await P.updatePc(SCROLL_PC, { scrollCollect: true });
+    assert.equal((await P.listPcs()).find((p) => p.id === SCROLL_PC).scrollCollect, true, 'the Computers list shows the switch');
+    await col('jobs').insertOne({ workspaceId: WS, keyword: 'scroll me', country: 'BD', phase: 'queued', maxAds: 500, createdAt: new Date() });
+    const a = await next(SCROLL_PC);
+    assert.equal(a.job.keyword, 'scroll me');
+    assert.equal(a.job.collectMode, 'scroll', 'this computer scrolls');
+    // reloading the tab (resume) and "Collect this search" keep the same way
+    const back = await (await fetch(`${base}/job/${a.job.id}/resume`, { method: 'POST', headers: H(SCROLL_PC) })).json();
+    assert.equal(back.job.collectMode, 'scroll');
+    await col('jobs').updateMany({}, { $set: { phase: 'collected', collectedAt: new Date(Date.now() - 60e3) } });
+    const m = await (await fetch(`${base}/manual-job`, { method: 'POST', headers: H(SCROLL_PC), body: JSON.stringify({ keyword: 'by hand', country: 'BD' }) })).json();
+    assert.equal(m.job.collectMode, 'scroll');
+    // every other computer: page by page, as before
+    await col('jobs').updateMany({}, { $set: { phase: 'collected', collectedAt: new Date(Date.now() - 60e3) } });
+    await col('jobs').insertOne({ workspaceId: WS, keyword: 'other', country: 'BD', phase: 'queued', maxAds: 500, createdAt: new Date() });
+    const o = await next(OTHER_PC);
+    assert.equal(o.job.keyword, 'other');
+    assert.equal(o.job.collectMode, 'pager', 'the others keep the pager');
+    await P.updatePc(SCROLL_PC, { scrollCollect: false });
+    assert.equal((await P.listPcs()).find((p) => p.id === SCROLL_PC).scrollCollect, false, 'switched back off');
+  } finally {
+    srv.close();
+    await col('pcs').deleteMany({});
+  }
+});

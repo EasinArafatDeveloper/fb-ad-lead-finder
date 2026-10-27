@@ -61,6 +61,8 @@ export async function listPcs(workspaceId = null) {
     takeQueue: p.takeQueue !== false,
     // Gentle mode (worker.js GENTLE): fewer, slower searches - for a server/datacenter IP that Facebook limits sooner
     gentle: p.gentle === true,
+    // collects the Ad Library by scrolling like a person instead of asking page by page (worker.js collectModeFor)
+    scrollCollect: p.scrollCollect === true,
     // after Facebook's "slow down" every computer rests (worker.js limitRestMs: Gentle 60 min, others 30 min)
     restingUntil: p.limitedAt && Date.now() - new Date(p.limitedAt).getTime() < restMs(p) ? new Date(new Date(p.limitedAt).getTime() + restMs(p)) : null,
     collecting: running.filter((j) => j.collector === p._id).map((j) => j.keyword),
@@ -74,5 +76,6 @@ export async function updatePc(id, b = {}) {
   if ('name' in b) set.name = String(b.name || '').trim().slice(0, 40);
   if ('takeQueue' in b) set.takeQueue = Boolean(b.takeQueue);
   if ('gentle' in b) set.gentle = Boolean(b.gentle);
+  if ('scrollCollect' in b) set.scrollCollect = Boolean(b.scrollCollect);
   if (Object.keys(set).length) await col('pcs').updateOne({ _id: String(id) }, { $set: set });
 }

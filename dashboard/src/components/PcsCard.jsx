@@ -5,6 +5,14 @@ import { api } from '../lib/api';
 import { cn, timeAgo } from '../lib/utils';
 import { Skeleton } from './ui';
 
+/** "3.6.1" >= "3.6.1" — the version a computer runs against the one a feature needs. */
+const atLeast = (v, min) => {
+  const a = String(v || '0').split('.').map(Number);
+  const b = min.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i];
+  return true;
+};
+
 /**
  * Settings → Worker: every computer that runs the extension. Name them, and choose which ones run the
  * searches started in the Dashboard (the others can still press "Collect" in their own Ad Library tab).
@@ -117,6 +125,27 @@ export default function PcsCard() {
                     <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', p.gentle && 'translate-x-5')} />
                   </button>
                 </label>
+                {/* collects the Ad Library by scrolling like a person, not page by page (server: worker.js collectModeFor) */}
+                <label
+                  className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300"
+                  title="This computer scrolls the Ad Library like a person and takes the ads Facebook loads, instead of asking for the pages directly. Keep its Ad Library tab in front (a minimised remote-desktop window pauses it). Needs extension 3.6.1+."
+                >
+                  Collect by scrolling
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={p.scrollCollect}
+                    onClick={() => save(p, { scrollCollect: !p.scrollCollect }, p.scrollCollect ? `${p.label}: collects page by page again` : `${p.label}: collects by scrolling`)}
+                    className={cn('relative h-6 w-11 shrink-0 rounded-full transition-colors', p.scrollCollect ? 'bg-sky-500' : 'bg-slate-200 dark:bg-white/10')}
+                  >
+                    <span className={cn('absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform', p.scrollCollect && 'translate-x-5')} />
+                  </button>
+                </label>
+                {p.scrollCollect && !atLeast(p.version, '3.6.1') && (
+                  <p className="w-full px-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                    This computer runs v{p.version} — install extension 3.6.1 or newer on it, older ones still collect page by page.
+                  </p>
+                )}
                 {p.restingUntil && (
                   <p className="w-full px-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
                     Resting after Facebook asked to slow down — next search after {new Date(p.restingUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

@@ -300,17 +300,20 @@
     await sleep(800);
     await flush(false);
 
-    // 1) page by page, without scrolling — works with the tab in the background (adlibrary-hook.js: the pager)
-    const byPages = await collectByPages();
+    // 1) page by page, without scrolling — works with the tab in the background (adlibrary-hook.js: the pager).
+    //    A computer the admin set to "Collect by scrolling" (server: worker.js collectModeFor) skips this.
+    const scrollOnly = job.collectMode === 'scroll';
+    const byPages = scrollOnly ? 'scroll' : await collectByPages();
     // tell the team why background collecting could not work on this computer (shown in the admin panel)
     if (byPages === 'fallback') await send({ type: 'adlib:jobStatus', jobId: job.id, note: `Background collecting not possible here (${pagerError || 'unknown'}) — scrolling instead` });
-    // 2) only if that can't work on this page: scroll like a person (needs the tab in front)
+    // 2) scroll like a person (needs the tab in front): on a "Collect by scrolling" computer, or when the pager
+    //    can't work on this page. The ads Facebook loads while scrolling are taken by adlibrary-hook.js.
     let last = -1;
     let stall = 0;
     let lastNewAt = Date.now();
     let rounds = 0;
     let hiddenToldAt = 0;
-    while (byPages === 'fallback' && !stopRequested) {
+    while ((byPages === 'fallback' || byPages === 'scroll') && !stopRequested) {
       // Facebook loads more ads only while this tab is visible. In the background nothing new arrives — that is
       // NOT the end of the results: wait (keep the heartbeat going) instead of finishing with what we have.
       if (document.hidden) {
