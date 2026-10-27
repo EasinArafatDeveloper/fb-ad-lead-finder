@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
-  BadgeDollarSign, Coins, Megaphone, CreditCard, FolderOpen, Gauge, KeyRound, LayoutDashboard, Link2, LogOut, MailCheck, Menu, Moon, Pause, Play, Plus, Receipt, Search, ScrollText, Settings, Square, Sun, UserCog, Users, X,
+  BadgeDollarSign, Coins, Megaphone, CreditCard, FolderOpen, Gauge, KeyRound, LayoutDashboard, Link2, LogOut, Radio, MailCheck, Menu, Moon, Pause, Play, Plus, Receipt, Search, ScrollText, Settings, Square, Sun, UserCog, Users, X,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -45,6 +45,7 @@ const navFor = (admin) => [
           label: 'Admin',
           items: [
             { to: '/admin', label: 'Overview', icon: Gauge, end: true },
+            { to: '/admin/live', label: 'Live activity', icon: Radio },
             { to: '/admin/users', label: 'Customers', icon: UserCog },
             { to: '/admin/orders', label: 'Orders', icon: Receipt },
             { to: '/admin/plans', label: 'Plans & prices', icon: BadgeDollarSign },

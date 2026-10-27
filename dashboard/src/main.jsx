@@ -20,6 +20,7 @@ import Logs from './pages/Logs';
 import Users from './pages/Users';
 import AdminOverview from './pages/admin/AdminOverview';
 import AdminAccount from './pages/admin/AdminAccount';
+import AdminLive from './pages/admin/AdminLive';
 import AdminOrders from './pages/admin/AdminOrders';
 import AdminPlans from './pages/admin/AdminPlans';
 import AdminNotices from './pages/admin/AdminNotices';
@@ -99,6 +100,7 @@ function App() {
 
           {/* the admin panel — the team only */}
           {admin && <Route path="admin" element={<AdminOverview />} />}
+          {admin && <Route path="admin/live" element={<AdminLive />} />}
           {admin && <Route path="admin/accounts/:ws" element={<AdminAccount />} />}
           {admin && <Route path="admin/users" element={<Users />} />}
           {admin && <Route path="admin/orders" element={<AdminOrders />} />}

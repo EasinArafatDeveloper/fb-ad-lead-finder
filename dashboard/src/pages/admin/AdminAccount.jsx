@@ -52,8 +52,8 @@ export default function AdminAccount() {
 
   return (
     <div className="space-y-6">
-      <Link to="/admin" className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
-        <ArrowLeft className="h-4 w-4" /> Admin
+      <Link to="/admin/live" className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
+        <ArrowLeft className="h-4 w-4" /> Live activity
       </Link>
       <PageHeader
         icon={Eye}

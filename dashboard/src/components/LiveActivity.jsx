@@ -148,9 +148,20 @@ function Account({ a }) {
   );
 }
 
+// which accounts to show — with many customers the list gets long
+const isWorking = (a) => a.collecting.length > 0 || a.reading.working > 0 || a.reading.last5min > 0;
+const SHOW = [
+  ['all', 'All', () => true],
+  ['working', 'Working now', isWorking],
+  ['waiting', 'Waiting', (a) => !isWorking(a) && (a.queued.length > 0 || a.reading.pending > 0)],
+  ['problems', 'With problems', (a) => a.issues.length > 0],
+];
+
 export default function LiveActivity() {
   const [d, setD] = useState(null);
   const [error, setError] = useState('');
+  const [show, setShow] = useState('all');
+  const [find, setFind] = useState('');
   useEffect(() => {
     let stop = false;
     const load = () =>
@@ -169,7 +180,7 @@ export default function LiveActivity() {
     <section className="card p-5">
       <div className="flex flex-wrap items-center gap-3">
         <h3 className="flex items-center gap-2 font-display font-bold">
-          <Radio className="h-4 w-4 text-rose-500" /> Live — what every account is doing
+          <Radio className="h-4 w-4 text-rose-500" /> Right now
         </h3>
         <span className="text-xs text-slate-500">{d ? `updated ${timeAgo(d.at)} · every 5 s` : 'loading…'}</span>
         {error && <span className="text-xs text-rose-600">{error}</span>}
@@ -195,7 +206,40 @@ export default function LiveActivity() {
           {!d.accounts.length ? (
             <p className="mt-6 text-center text-sm text-slate-500">Nobody has worked in the last 2 hours.</p>
           ) : (
-            <ul className="mt-4 space-y-3">{d.accounts.map((a) => <Account key={a.workspaceId} a={a} />)}</ul>
+            (() => {
+              const needle = find.trim().toLowerCase();
+              const test = SHOW.find(([k]) => k === show)[2];
+              const shown = d.accounts.filter((a) => test(a) && (!needle || `${a.name} ${a.email}`.toLowerCase().includes(needle)));
+              return (
+                <>
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap rounded-xl border border-slate-200 bg-white p-0.5 dark:border-white/10 dark:bg-slate-900" role="tablist" aria-label="Show accounts">
+                      {SHOW.map(([k, label, f]) => (
+                        <button
+                          key={k}
+                          type="button"
+                          role="tab"
+                          aria-selected={show === k}
+                          onClick={() => setShow(k)}
+                          className={cn('rounded-lg px-2.5 py-1.5 text-xs font-semibold transition', show === k ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white')}
+                        >
+                          {label} <span className="tabular-nums opacity-70">{d.accounts.filter(f).length}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative ml-auto w-full sm:w-64">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find an account (name, email)" aria-label="Find an account" className="input h-9 pl-9 text-sm" />
+                    </div>
+                  </div>
+                  {!shown.length ? (
+                    <p className="mt-6 text-center text-sm text-slate-500">No account matches.</p>
+                  ) : (
+                    <ul className="mt-4 space-y-3">{shown.map((a) => <Account key={a.workspaceId} a={a} />)}</ul>
+                  )}
+                </>
+              );
+            })()
           )}
         </>
       )}

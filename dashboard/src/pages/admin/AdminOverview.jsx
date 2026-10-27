@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { ArrowRight, BellRing, CheckCircle2, Coins, DollarSign, FileSearch, Gauge, PlugZap, Receipt, ShieldCheck, UserPlus, Users } from 'lucide-react';
+import { ArrowRight, BellRing, CheckCircle2, Coins, DollarSign, FileSearch, Gauge, PlugZap, Radio, Receipt, ShieldCheck, UserPlus, Users } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatNumber } from '../../lib/utils';
 import { Button, KpiCard, PageHeader, Skeleton } from '../../components/ui';
-import LiveActivity from '../../components/LiveActivity';
 
 /** 14 days as small bars — sign-ups, pages read, money. */
 function Bars({ data, field, color, label, money }) {
@@ -145,6 +144,7 @@ export default function AdminOverview() {
   if (!d) return <Skeleton className="h-96" />;
   const totalWs = Object.values(d.byPlan).reduce((a, n) => a + n, 0) || 1;
   const links = [
+    ['/admin/live', Radio, 'Live activity', 'What every account is doing now'],
     ['/admin/users', Users, 'Customers', 'Plans, credits, accounts'],
     ['/admin/orders', Receipt, 'Orders', d.pendingOrders ? `${d.pendingOrders} waiting for payment` : 'Payments and invoices'],
     ['/admin/plans', DollarSign, 'Plans & prices', 'Prices, credits, limits, sign-up'],
@@ -154,8 +154,6 @@ export default function AdminOverview() {
   return (
     <div className="space-y-8">
       <PageHeader icon={Gauge} title="Admin" subtitle="Customers, money and usage — the whole service at a glance" />
-
-      <LiveActivity />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Customers" value={d.users} icon={Users} tone="indigo" sub={`${d.signups7} new this week · ${d.active7} searched this week`} />
