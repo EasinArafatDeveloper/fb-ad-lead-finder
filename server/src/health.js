@@ -15,14 +15,14 @@ const WORKER_OFFLINE_SEC = 150; // the extension asks the server at least once a
  * level: 'error' (stopped, you must act) | 'warn' (stuck/slow, may fix itself) | 'info' (waiting by design)
  * Each: { level, key, title, detail, fix }
  */
-export async function engineHealth(s) {
+export async function engineHealth(s, viewerWs = null) {
   const issues = [];
   const add = (level, key, title, detail, fix = '') => issues.push({ level, key, title, detail, fix });
   const now = Date.now();
   const pool = proxyPool(s);
   const onServer = serverReads(s, pool);
   const [worker, collecting, queuedJobs, pending, forChrome, visits, recentErrors, ipStates] = await Promise.all([
-    workerInfo(),
+    workerInfo(viewerWs),
     col('jobs').find({ phase: 'collecting' }).project({ keyword: 1, lastActivity: 1, adsSeen: 1, maxAds: 1, pageIds: 1 }).toArray(),
     col('jobs').countDocuments({ phase: 'queued' }),
     col('pages').countDocuments({ scrapeStatus: 'pending' }),
@@ -43,6 +43,11 @@ export async function engineHealth(s) {
     const now = worker.running?.length ? `Running right now: ${worker.running.join(', ')}. ` : '';
     const where = worker.oldCopies?.length ? `Old copies online: ${worker.oldCopies.join(' · ')}. ` : now;
     add('warn', 'extension-old', `An old extension version is running (${worker.version})`, `${where}The latest is ${worker.latest}.`, 'On that computer open chrome://extensions: if FB Ad Lead Finder is there twice, Remove the old one; otherwise put the new ZIP in its folder and press Reload. One copy per browser.');
+  }
+  // other accounts' old extensions: theirs to update (they see their own warning) — one quiet line here
+  if (worker?.othersOld) {
+    const n = worker.othersOld;
+    add('info', 'extension-old-accounts', `${n} other account${n > 1 ? 's' : ''} still run${n > 1 ? '' : 's'} an old extension`, 'They see their own reminder on their Dashboard.', 'Admin → Overview → Extension updates: see who, and send them a reminder.');
   }
 
   // 3 — Ad Library tabs that went silent

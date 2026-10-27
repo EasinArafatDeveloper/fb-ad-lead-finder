@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { ArrowRight, Coins, DollarSign, FileSearch, Gauge, Receipt, ShieldCheck, UserPlus, Users } from 'lucide-react';
+import { ArrowRight, BellRing, CheckCircle2, Coins, DollarSign, FileSearch, Gauge, PlugZap, Receipt, ShieldCheck, UserPlus, Users } from 'lucide-react';
 import { api } from '../../lib/api';
 import { cn, formatNumber } from '../../lib/utils';
-import { KpiCard, PageHeader, Skeleton } from '../../components/ui';
+import { Button, KpiCard, PageHeader, Skeleton } from '../../components/ui';
 
 /** 14 days as small bars — sign-ups, pages read, money. */
 function Bars({ data, field, color, label, money }) {
@@ -31,7 +31,105 @@ function Bars({ data, field, color, label, money }) {
   );
 }
 
-const PLAN_TONE = { free: 'bg-sky-400', starter: 'bg-indigo-400', pro: 'bg-violet-500', agency: 'bg-fuchsia-500', internal: 'bg-slate-400' };
+const ago = (d) => {
+  const min = Math.round((Date.now() - new Date(d).getTime()) / 60000);
+  if (min < 2) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 48 * 60) return `${Math.round(min / 60)} h ago`;
+  return `${Math.round(min / 1440)} days ago`;
+};
+
+/** Who still runs an old Chrome extension — and a reminder in their bell, one click. */
+function ExtensionUpdates() {
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState('');
+  useEffect(() => {
+    api('/admin/extensions').then(setD).catch((e) => toast.error(e.message));
+  }, []);
+  const remind = async (body, key) => {
+    setBusy(key);
+    try {
+      const r = await api('/admin/extensions/remind', { method: 'POST', body });
+      setD(r);
+      toast.success(r.sent ? `Reminder sent to ${r.sent} account${r.sent > 1 ? 's' : ''}` : 'Already reminded in the last hour — nothing sent');
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+  if (!d) return null;
+  const total = d.accounts.length + (d.teamKey.length ? 1 : 0);
+  return (
+    <section className="card p-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <h3 className="flex items-center gap-2 font-display font-bold"><PlugZap className="h-4 w-4 text-indigo-500" /> Extension updates</h3>
+        <span className="text-xs text-slate-500">Latest version {d.latest} · computers seen in the last {d.days} days</span>
+        {d.accounts.length > 1 && (
+          <Button size="sm" className="ml-auto" loading={busy === 'all'} onClick={() => remind({ all: true }, 'all')}>
+            <BellRing className="h-3.5 w-3.5" /> Remind everybody
+          </Button>
+        )}
+      </div>
+      {!total ? (
+        <p className="mt-3 flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="h-4 w-4" /> Everybody runs the latest extension.</p>
+      ) : (
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 text-sm dark:border-white/10">
+          <table className="w-full">
+            <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:bg-slate-800">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Account</th>
+                <th className="px-3 py-2 font-semibold">Computers on an old version</th>
+                <th className="px-3 py-2 font-semibold">Reminder</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.accounts.map((a) => (
+                <tr key={a.workspaceId} className="border-t border-slate-100 align-top dark:border-white/5">
+                  <td className="px-3 py-2">
+                    <span className="block font-semibold">{a.name || a.account || 'Account'}{a.team && <span className="ml-1.5 rounded bg-slate-100 px-1 text-[10px] font-bold text-slate-500 dark:bg-white/10">TEAM</span>}</span>
+                    <span className="block text-xs text-slate-500">{a.email}</span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {a.pcs.map((p) => (
+                      <span key={p.id} className="block text-xs">
+                        <b className="tabular-nums">v{p.version}</b> · {p.name || p.browser} · IP {p.ip || '?'} ·{' '}
+                        {p.online ? <span className="font-semibold text-emerald-600">online now</span> : <span className="text-slate-500">seen {ago(p.lastSeen)}</span>}
+                      </span>
+                    ))}
+                  </td>
+                  <td className="px-3 py-2">
+                    <Button size="sm" loading={busy === a.workspaceId} onClick={() => remind({ workspaceId: a.workspaceId }, a.workspaceId)}>
+                      <BellRing className="h-3.5 w-3.5" /> Send reminder
+                    </Button>
+                    {a.remindedAt && <span className="mt-1 block text-[11px] text-slate-500">Reminded {ago(a.remindedAt)}</span>}
+                  </td>
+                </tr>
+              ))}
+              {d.teamKey.length > 0 && (
+                <tr className="border-t border-slate-100 align-top dark:border-white/5">
+                  <td className="px-3 py-2">
+                    <span className="block font-semibold">Team computers</span>
+                    <span className="block text-xs text-slate-500">the server's worker key — no account to remind</span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {d.teamKey.map((p) => (
+                      <span key={p.id} className="block text-xs"><b className="tabular-nums">v{p.version}</b> · {p.name || p.browser} · IP {p.ip || '?'} · {p.online ? 'online now' : `seen ${ago(p.lastSeen)}`}</span>
+                    ))}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-500">Update them yourself</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-3 text-xs text-slate-500">The reminder lands in their bell (top right) with a link to the download. Each account also sees its own reminder on its Dashboard.</p>
+    </section>
+  );
+}
+
+const PLAN_TONE ={ free: 'bg-sky-400', starter: 'bg-indigo-400', pro: 'bg-violet-500', agency: 'bg-fuchsia-500', internal: 'bg-slate-400' };
 
 /** /admin — the business at a glance. */
 export default function AdminOverview() {
@@ -75,6 +173,8 @@ export default function AdminOverview() {
         <Bars data={d.daily} field="pages" color="bg-sky-500" label="Pages read · 14 days" />
         <Bars data={d.daily} field="revenue" color="bg-emerald-500" label="Money in · 14 days" money />
       </section>
+
+      <ExtensionUpdates />
 
       <section className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
         <div className="card p-5">

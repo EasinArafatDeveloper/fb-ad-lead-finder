@@ -433,6 +433,56 @@ test('health: old extension version; every IP resting; pages only Chrome can rea
   assert.ok(k.includes('info:chrome-pages'));
 });
 
+test("health: another account's old extension is not the admin's warning — one quiet line, a list, and a reminder in their bell", async () => {
+  const WS2 = await import('../src/worker-state.js');
+  const { default: adminRoutes } = await import('../src/admin.js');
+  await col('pcs').deleteMany({});
+  await col('inbox').deleteMany({});
+  await workerSeen(5, '0.0.1');
+  const adminWs = new ObjectId();
+  const other = (await col('workspaces').insertOne({ name: "Shibli's workspace", plan: 'free' })).insertedId;
+  await col('users').insertOne({ email: `shibli${Date.now()}@x.com`, name: 'Shibli', workspaceId: other, createdAt: new Date() });
+  const pc = (id, workspaceId, version, ago = 5e3) => ({ _id: id, workspaceId, version, ip: '1.2.3.4', ua: 'Chrome/156', lastSeen: new Date(Date.now() - ago) });
+  await col('pcs').insertMany([
+    pc('pc-admin', adminWs, latest),
+    pc('pc-shibli', other, '0.0.1'),
+    pc('pc-shibli-old', other, '0.0.2', 3 * 864e5),
+  ]);
+  try {
+    let info = await WS2.workerInfo(adminWs);
+    assert.equal(info.outdated, false, "the admin's own computers are up to date");
+    assert.equal(info.othersOld, 1, 'one other account runs an old one');
+    let k = (await engineHealth(await getSettings(), adminWs)).map((x) => `${x.level}:${x.key}`);
+    assert.ok(!k.includes('warn:extension-old'), 'no big warning for the admin');
+    assert.ok(k.includes('info:extension-old-accounts'), 'one quiet line instead');
+
+    await col('pcs').updateOne({ _id: 'pc-admin' }, { $set: { version: '0.0.1' } });
+    info = await WS2.workerInfo(adminWs);
+    assert.equal(info.outdated, true, "the admin's own old computer still warns");
+    assert.equal(info.oldCopies.length, 1, 'only that one is listed in the warning');
+
+    const list = await WS2.outdatedExtensions();
+    const row = list.accounts.find((a) => a.workspaceId === String(other));
+    assert.ok(row, 'the other account is on the list');
+    assert.equal(row.pcs.length, 2, 'with both its old computers (online and 3 days ago)');
+    assert.equal(row.name, 'Shibli');
+
+    const app = express().use(express.json()).use((req, _res, next) => ((req.user = { email: 'admin@x.com' }), next())).use('/api/admin', adminRoutes);
+    const srv = app.listen(0);
+    const remind = async (body) => (await fetch(`http://127.0.0.1:${srv.address().port}/api/admin/extensions/remind`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+    try {
+      assert.equal((await remind({ workspaceId: String(other) })).sent, 1, 'reminder sent');
+      const note = await col('inbox').findOne({ workspaceId: other, kind: 'extension' });
+      assert.ok(note && /update your Chrome extension/i.test(note.title) && note.link === '/connect-extension', 'it is in their bell, with the download link');
+      assert.equal((await remind({ workspaceId: String(other) })).sent, 0, 'pressing again within an hour sends nothing');
+    } finally {
+      srv.close();
+    }
+  } finally {
+    await col('pcs').deleteMany({});
+  }
+});
+
 test('health: a recent engine error is shown (e.g. Facebook changed its pages)', async () => {
   await workerSeen(5, latest);
   await col('logs').insertOne({ ts: new Date(), level: 'error', msg: 'Facebook changed its page format? 10 pages in a row were not recognised' });

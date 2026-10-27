@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -478,6 +478,14 @@ export default function Layout() {
               )}
               <span>
                 On that computer open <code className="rounded bg-amber-100 px-1 dark:bg-amber-500/20">chrome://extensions</code>: if FB Ad Lead Finder is listed <b>twice</b>, Remove the old one; otherwise put the new ZIP in its folder and press <b>↻ Reload</b>.
+              </span>
+            </div>
+          )}
+          {!isAdmin && stats?.extensionOld && (
+            <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 sm:px-6">
+              <b>Your Chrome extension is out of date ({stats.extensionOld.running}) — the latest is {stats.extensionOld.latest}.</b>
+              <span>
+                It still works. To update: <Link to="/connect-extension" className="font-semibold underline">download the new version</Link>, put its files in the same folder, then press <b>↻ Reload</b> in <code className="rounded bg-amber-100 px-1 dark:bg-amber-500/20">chrome://extensions</code>.
               </span>
             </div>
           )}

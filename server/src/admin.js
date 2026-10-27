@@ -10,6 +10,7 @@ import { announce, notifyWorkspace } from './inbox.js';
 import { providerList } from './payments.js';
 import { deleteWorkspaceData, oid } from './projects.js';
 import { startOfToday } from './util.js';
+import { OUTDATED_LIST_DAYS, isOutdated, outdatedExtensions, worker as workerState } from './worker-state.js';
 
 const r = express.Router();
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).then((out) => out !== undefined && !res.headersSent && res.json(out)).catch(next);
@@ -262,6 +263,35 @@ r.post('/notices', ah(async (req) => {
 r.delete('/notices/:id', ah(async (req) => {
   await col('inbox').deleteOne({ _id: oid(req.params.id), kind: 'notice' });
   return { ok: true };
+}));
+
+// ---------------- extension updates: who still runs an old version, and a reminder in their bell ----------------
+r.get('/extensions', ah(async () => outdatedExtensions()));
+
+const REMINDER_GAP_MS = 60 * 60e3; // one reminder per account per hour — pressing twice doesn't spam the bell
+async function remindExtension(workspaceId, by) {
+  const ws = await col('workspaces').findOne({ _id: workspaceId }, { projection: { extReminderAt: 1 } });
+  if (!ws) return false;
+  if (ws.extReminderAt && Date.now() - new Date(ws.extReminderAt).getTime() < REMINDER_GAP_MS) return false;
+  const pcs = await col('pcs').find({ workspaceId, lastSeen: { $gt: new Date(Date.now() - OUTDATED_LIST_DAYS * 864e5) } }).project({ version: 1 }).toArray();
+  const old = [...new Set(pcs.filter((p) => isOutdated(p.version)).map((p) => p.version))];
+  if (!old.length) return false;
+  await notifyWorkspace(workspaceId, {
+    kind: 'extension', level: 'warn',
+    title: `Please update your Chrome extension (${old.join(', ')} → ${workerState.latest})`,
+    body: 'Download the new version on the Connect extension page, put its files in the same folder as the old one, then open chrome://extensions and press Reload. Your settings and leads stay as they are.',
+    link: '/connect-extension',
+  });
+  await col('workspaces').updateOne({ _id: workspaceId }, { $set: { extReminderAt: new Date() } });
+  await log('info', `${by} sent an extension update reminder to workspace ${workspaceId} (${old.join(', ')})`);
+  return true;
+}
+r.post('/extensions/remind', ah(async (req) => {
+  const b = req.body || {};
+  const ids = b.all ? (await outdatedExtensions()).accounts.map((a) => a.workspaceId) : [String(b.workspaceId || '')];
+  let sent = 0;
+  for (const id of ids) if (/^[0-9a-f]{24}$/.test(id) && (await remindExtension(oid(id), req.user.email))) sent++;
+  return { sent, ...(await outdatedExtensions()) };
 }));
 
 // ---------------- logs ----------------

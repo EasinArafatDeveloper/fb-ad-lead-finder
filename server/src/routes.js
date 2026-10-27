@@ -9,7 +9,7 @@ import { clampMaxAds, getSettings, getWsSettings, updateSettings, updateWsSettin
 import { AD_HEADERS, CONTACT_KINDS, LEAD_HEADERS, OVERRIDABLE, STATUSES, adRow, buildFilter, ingestAds, leadRow, leadsCursor, syncLeads } from './leads.js';
 import { pullSheet, syncSheet, testSheet } from './sheets.js';
 import { deleteLeads, ensureProject, oid, queuePages, stopPages } from './projects.js';
-import { workerInfo } from './worker-state.js';
+import { isOutdated, worker as workerState, workerInfo } from './worker-state.js';
 import { allProxies, forgetOldProxies, isBadIp, proxyGroups, proxyPool, proxyStatus } from './proxies.js';
 import { getPc, listPcs, pcName, pcNames, updatePc } from './pcs.js';
 import { accountOf, hasCredits, requirePerk } from './billing.js';
@@ -166,12 +166,15 @@ r.get('/stats', ah(async (req) => {
   // the computer that runs this account's searches is taking a break (worker.js: gap between searches / rest)
   const waiting = latestPcs.find((p) => p.takeQueue !== false && p.waitWhy && p.waitUntil && new Date(p.waitUntil) > new Date());
   const updateNeeded = latestPcs.length > 0 && !latestPcs.some((p) => canCollect(p.version));
+  // a customer's own computer on an older extension than the latest (it still works) — their own reminder
+  const myOld = admin ? [] : latestPcs.filter((p) => isOutdated(p.version));
   return {
     total, withEmail, withPhone, pending, failed, scrapedToday, contacted, queuedJobs, collecting, active, activeName,
-    worker: admin ? await workerInfo() : myPc ? { version: myPc.version, seenAgo: Math.round((Date.now() - new Date(myPc.lastSeen).getTime()) / 1000), mine: true } : null,
+    worker: admin ? await workerInfo(ws) : myPc ? { version: myPc.version, seenAgo: Math.round((Date.now() - new Date(myPc.lastSeen).getTime()) / 1000), mine: true } : null,
     account: await accountOf(ws),
     queueWait: waiting ? { why: waiting.waitWhy, until: waiting.waitUntil } : null,
     extensionUpdate: updateNeeded ? { min: MIN_COLLECT_VERSION, running: [...new Set(latestPcs.map((p) => p.version))].join(', ') } : null,
+    extensionOld: myOld.length ? { running: [...new Set(myOld.map((p) => p.version))].join(', '), latest: workerState.latest } : null,
     inboxUnread: await unreadCount(req.user), // the bell's red number
     // the team: the shared daily page limit for the whole server; a customer: their own pages today
     workerVisitsToday: admin ? visits : myToday,
@@ -630,12 +633,15 @@ r.get('/pipeline', ah(async (req) => {
     }
     else if (account.credits < 50 && !account.unlimited) customerHealth.push({ level: 'info', key: 'low-credits', title: `Only ${account.credits} credits left`, detail: '1 credit = 1 page read.', fix: 'Billing → buy credits' });
     if (req.user.emailVerified === false) customerHealth.push({ level: 'warn', key: 'verify', title: 'Confirm your email address', detail: 'We sent you a link. Searches start once your email is confirmed.', fix: 'Settings → Account → send the link again' });
+    const myOldPcs = await col('pcs').find({ workspaceId: ws, lastSeen: { $gte: new Date(Date.now() - 5 * 60e3) } }).project({ version: 1 }).toArray();
+    const oldVersions = [...new Set(myOldPcs.filter((p) => isOutdated(p.version)).map((p) => p.version))];
+    if (oldVersions.length) customerHealth.push({ level: 'warn', key: 'extension-old', title: `Your Chrome extension is out of date (${oldVersions.join(', ')})`, detail: `The latest is ${workerState.latest}. It still works, but update it to get the latest fixes.`, fix: 'Connect extension page → download the new ZIP → put it in the same folder → chrome://extensions → Reload' });
     if ((queuedJobs.length || collecting) && !myPcs.length) customerHealth.push({ level: 'warn', key: 'no-extension', title: 'Your Chrome extension is not connected', detail: 'Your searches run in your own Chrome — they wait until the extension is installed and connected.', fix: 'Settings → Extension → connect' });
   }
   return {
     server: admin ? server : null,
     live: admin ? live : { ...live, lanes: [] },
-    health: admin ? await engineHealth(s) : customerHealth,
+    health: admin ? await engineHealth(s, ws) : customerHealth,
     account,
     extensionConnected: admin ? true : myPcs.length > 0,
     running: s.running,
@@ -661,7 +667,7 @@ r.get('/pipeline', ah(async (req) => {
     paceMeasured: !!measured,
     todayLeft: left,
     tomorrow: Math.max(0, pendingAll - left),
-    worker: await workerInfo(),
+    worker: admin ? await workerInfo(ws) : null,
     activity: activityList.map(({ _id, projectId, workspaceId, ...a }) => a),
   };
 }));
