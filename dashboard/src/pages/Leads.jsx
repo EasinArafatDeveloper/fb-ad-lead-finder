@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowDownWideNarrow, AtSign, Check, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Download, ExternalLink, Globe, MessageCircle, Pencil, Phone, PhoneOff,
-  Lock, Plus, RotateCcw, RotateCw, Search, SlidersHorizontal, Trash2, Users, X,
+  Lightbulb, Lock, Plus, RotateCcw, RotateCw, Search, SlidersHorizontal, Trash2, Users, X,
 } from 'lucide-react';
 import { api, download, qs } from '../lib/api';
 import { STATUSES, cn, formatNumber, host, safeUrl } from '../lib/utils';
@@ -342,6 +342,16 @@ export default function Leads() {
               }}
             >
               {canSheet ? <CloudUpload className="h-4 w-4" /> : <Lock className="h-4 w-4 text-slate-400" />} Sheet
+            </Button>
+            <Button
+              title="Hooks, offers, prices, formats and top advertisers of the leads in view (all leads when no filter is on)"
+              onClick={() => {
+                const { sort, dir, ...f } = query;
+                const s = qs(f);
+                navigateTo(`/leads/insights${s ? `?${s}` : ''}`);
+              }}
+            >
+              <Lightbulb className="h-4 w-4 text-amber-500" /> Ad insights
             </Button>
             <Button onClick={() => download(`/export.csv?${qs(query)}`, `fb-leads-${today}.csv`).catch((e) => toast.error(e.message))}>CSV</Button>
             <Button

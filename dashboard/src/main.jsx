@@ -91,6 +91,7 @@ function App() {
           <Route path="search" element={<Searches />} />
           <Route path="links" element={<PasteLinks />} />
           <Route path="leads" element={<Leads />} />
+          <Route path="leads/insights" element={<Insights scope="leads" />} />
           <Route path="settings" element={<Settings />} />
           <Route path="billing" element={<Billing />} />
           <Route path="connect-extension" element={<ConnectExtension />} />

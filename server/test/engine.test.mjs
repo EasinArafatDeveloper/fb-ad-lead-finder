@@ -1238,6 +1238,23 @@ test('Ad insights without AI: hook, offers, prices from the ad text; the page ge
   assert.equal(pi.longRunning, 3, 'all three have run 30+ days');
   assert.equal(pi.prices.min, 950);
 
+  // All Leads: the same insights over every ad of the leads in view — here every lead, then one filtered
+  const job2 = { id: 'j-ins2', workspaceId: WS, keyword: 'ins2', country: 'BD', maxAds: 100, projectId: new ObjectId() };
+  await ingestAds(job2, [{ adId: 'i4', pageId: 'pins2', pageName: 'Other Shop', body: 'অন্য দোকান\nEMI সুবিধা ৳১০,০০০', startDate: '2026-10-01' }]);
+  await col('leads').updateOne({ workspaceId: WS, pageId: 'pins2' }, { $set: { category: 'Electronics, Shopping' } });
+  await col('leads').insertOne({ workspaceId: WS, pageId: '@pasted', category: 'Travel agency', sources: ['links'], createdAt: new Date(), updatedAt: new Date() });
+  const all = await I.leadsInsights(WS, buildFilter(WS, {}), { fresh: true });
+  assert.equal(all.ads, 4, 'every ad of every lead');
+  assert.equal(all.leads, 3);
+  assert.equal(all.leadsWithAds, 2, 'the pasted lead has no ads');
+  assert.equal(all.advertisers, 2);
+  assert.ok(all.offers.find((o) => o.offer === 'EMI').ads === 1);
+  assert.equal(all.prices.max, 10000);
+  assert.deepEqual(all.categories.map((c) => c.name).sort(), ['Electronics', 'Travel agency'], 'categories of the leads (first one each)');
+  const one = await I.leadsInsights(WS, buildFilter(WS, { q: 'Other Shop' }), { fresh: true });
+  assert.equal(one.ads, 1, 'only the leads in view');
+  assert.equal((await I.leadsInsights(WS, buildFilter(WS, { q: 'Other Shop' }))).cached, true, 'kept for 10 minutes');
+
   // an error inside insights never reaches the engine: ingestAds still saves the ads
   const r = await I.insightsAfterIngest(null);
   assert.equal(r, undefined);

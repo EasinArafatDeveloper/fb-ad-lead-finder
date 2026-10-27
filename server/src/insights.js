@@ -147,57 +147,129 @@ export async function insightsAfterIngest(adIds) {
 
 // ---------------- the project's Insights page ----------------
 const daysSince = (d) => (d ? Math.max(0, Math.floor((Date.now() - Date.parse(d)) / 86400e3)) : 0);
-const tally = (list) => Object.entries(list.reduce((m, x) => ((m[x] = (m[x] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]);
+
+const AD_FIELDS = { adId: 1, pageId: 1, pageName: 1, startDate: 1, format: 1, cta: 1, ctaType: 1, linkUrl: 1, ins: 1 };
+const HOOK_PAGES_MAX = 1000; // "used by N advertisers" counts up to this many per hook (memory stays small)
+
+/**
+ * Insights over any number of ads, added one at a time (a project's few hundred, or every ad of all the leads —
+ * hundreds of thousands, read from the database in parts). `add(ad)` for each, then `result()`.
+ */
+function adTally() {
+  let n = 0;
+  let analysed = 0;
+  let longRunning = 0;
+  const byHook = new Map();
+  const prices = [];
+  const offers = new Map(OFFER_NAMES.map((o) => [o, 0]));
+  const formats = new Map();
+  const orderVia = new Map();
+  const languages = new Map();
+  const pages = new Map();
+  const bump = (m, k) => k && m.set(k, (m.get(k) || 0) + 1);
+  return {
+    add(a) {
+      n++;
+      const d = daysSince(a.startDate);
+      const p = pages.get(a.pageId) || { pageId: a.pageId, pageName: a.pageName, ads: 0, days: 0 };
+      p.ads++;
+      p.days = Math.max(p.days, d);
+      pages.set(a.pageId, p);
+      bump(formats, formatName(a.format));
+      bump(orderVia, orderChannel(a));
+      if (!a.ins) return;
+      analysed++;
+      if (d >= 30) longRunning++;
+      bump(languages, a.ins.lang);
+      for (const o of a.ins.offers || []) if (offers.has(o)) offers.set(o, offers.get(o) + 1);
+      for (const x of a.ins.prices || []) prices.push(x);
+      // hooks: the same opening line used in several ads counts once, ranked by how long its ads have run
+      if (a.ins.hook) {
+        const k = a.ins.hook.toLowerCase();
+        const cur = byHook.get(k) || { hook: a.ins.hook, ads: 0, days: -1, pageName: a.pageName, adId: a.adId, pages: new Set() };
+        cur.ads++;
+        if (cur.pages.size < HOOK_PAGES_MAX) cur.pages.add(a.pageId);
+        if (d > cur.days) Object.assign(cur, { days: d, pageName: a.pageName, adId: a.adId });
+        byHook.set(k, cur);
+      }
+    },
+    result({ allHooks = false } = {}) {
+      const pct = (k) => (n ? Math.round((k * 100) / n) : 0);
+      const share = (m) => [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ name: k, ads: v, pct: pct(v) }));
+      const hooks = [...byHook.values()].sort((a, b) => b.days - a.days || b.ads - a.ads);
+      prices.sort((a, b) => a - b);
+      const q = (p) => (prices.length ? prices[Math.min(prices.length - 1, Math.floor(p * prices.length))] : null);
+      return {
+        ads: n,
+        analysed,
+        longRunning,
+        hookCount: hooks.length,
+        hooks: (allHooks ? hooks : hooks.slice(0, 60)).map(({ pages: pg, ...h }) => ({ ...h, days: Math.max(0, h.days), pages: pg.size })),
+        offers: OFFER_NAMES.map((o) => ({ offer: o, ads: offers.get(o), pct: pct(offers.get(o)) })).sort((a, b) => b.ads - a.ads),
+        prices: prices.length ? { count: prices.length, min: prices[0], low: q(0.25), median: q(0.5), high: q(0.75), max: prices[prices.length - 1] } : null,
+        formats: share(formats),
+        orderVia: share(orderVia),
+        languages: share(languages),
+        advertisers: pages.size,
+        topByAds: [...pages.values()].sort((a, b) => b.ads - a.ads).slice(0, allHooks ? 100 : 10),
+        topByDays: [...pages.values()].sort((a, b) => b.days - a.days).slice(0, allHooks ? 100 : 10),
+      };
+    },
+  };
+}
 
 /** "allHooks": every hook (the Excel report), else the top 60 (the page). */
 export async function projectInsights(projectId, { allHooks = false } = {}) {
-  const ads = await col('ads')
-    .find({ projectIds: projectId })
-    .project({ adId: 1, pageId: 1, pageName: 1, startDate: 1, format: 1, cta: 1, ctaType: 1, linkUrl: 1, ins: 1 })
-    .toArray();
-  const n = ads.length;
-  const withIns = ads.filter((a) => a.ins);
-  const pct = (k) => (n ? Math.round((k * 100) / n) : 0);
-  const longRunning = withIns.filter((a) => daysSince(a.startDate) >= 30);
+  const t = adTally();
+  for await (const a of col('ads').find({ projectIds: projectId }).project(AD_FIELDS)) t.add(a);
+  return t.result({ allHooks });
+}
 
-  // hooks: the same opening line used in several ads counts once, ranked by how long its ads have run
-  const byHook = new Map();
-  for (const a of withIns) {
-    if (!a.ins.hook) continue;
-    const k = a.ins.hook.toLowerCase();
-    const cur = byHook.get(k) || { hook: a.ins.hook, ads: 0, days: 0, pageName: a.pageName, adId: a.adId, pages: new Set() };
-    cur.ads++;
-    cur.pages.add(a.pageId);
-    const d = daysSince(a.startDate);
-    if (d > cur.days) Object.assign(cur, { days: d, pageName: a.pageName, adId: a.adId });
-    byHook.set(k, cur);
-  }
-  const hooks = [...byHook.values()].sort((a, b) => b.days - a.days || b.ads - a.ads);
+// ---------------- All Leads: the same insights over every ad of the leads in view ----------------
+const LEAD_CHUNK = 5000;
+const leadCache = new Map(); // workspace + filter → { at, data } — a big workspace takes a few seconds
+export const LEADS_INSIGHTS_TTL_MS = 10 * 60e3;
 
-  const prices = withIns.flatMap((a) => a.ins.prices || []).sort((a, b) => a - b);
-  const q = (p) => (prices.length ? prices[Math.min(prices.length - 1, Math.floor(p * prices.length))] : null);
-
-  const pages = new Map();
-  for (const a of ads) {
-    const p = pages.get(a.pageId) || { pageId: a.pageId, pageName: a.pageName, ads: 0, days: 0 };
-    p.ads++;
-    p.days = Math.max(p.days, daysSince(a.startDate));
-    pages.set(a.pageId, p);
-  }
-  return {
-    ads: n,
-    analysed: withIns.length,
-    longRunning: longRunning.length,
-    hooks: (allHooks ? hooks : hooks.slice(0, 60)).map(({ pages: pg, ...h }) => ({ ...h, pages: pg.size })),
-    offers: OFFER_NAMES.map((o) => {
-      const k = withIns.filter((a) => (a.ins.offers || []).includes(o)).length;
-      return { offer: o, ads: k, pct: pct(k) };
-    }).sort((a, b) => b.ads - a.ads),
-    prices: prices.length ? { count: prices.length, min: prices[0], low: q(0.25), median: q(0.5), high: q(0.75), max: prices[prices.length - 1] } : null,
-    formats: tally(ads.map((a) => formatName(a.format)).filter(Boolean)).map(([k, v]) => ({ name: k, ads: v, pct: pct(v) })),
-    orderVia: tally(ads.map((a) => orderChannel(a)).filter(Boolean)).map(([k, v]) => ({ name: k, ads: v, pct: pct(v) })),
-    languages: tally(withIns.map((a) => a.ins.lang).filter(Boolean)).map(([k, v]) => ({ name: k, ads: v, pct: pct(v) })),
-    topByAds: [...pages.values()].sort((a, b) => b.ads - a.ads).slice(0, 10),
-    topByDays: [...pages.values()].sort((a, b) => b.days - a.days).slice(0, 10),
+/**
+ * The ad insights of the leads matching `filter` (leads.js buildFilter — always one workspace): their ads, plus
+ * what the leads themselves say (how many have ads at all, their categories). Cached for 10 minutes per filter;
+ * `fresh` recalculates.
+ */
+export async function leadsInsights(ws, filter, { allHooks = false, fresh = false } = {}) {
+  const key = `${ws}|${JSON.stringify(filter)}|${allHooks}`;
+  const hit = leadCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < LEADS_INSIGHTS_TTL_MS) return { ...hit.data, cached: true };
+  const t = adTally();
+  const categories = new Map();
+  let leads = 0;
+  let withAds = 0;
+  let chunk = [];
+  const flush = async () => {
+    if (!chunk.length) return;
+    const seen = new Set();
+    for await (const a of col('ads').find({ pageId: { $in: chunk } }).project(AD_FIELDS)) {
+      seen.add(a.pageId);
+      t.add(a);
+    }
+    withAds += seen.size;
+    chunk = [];
   };
+  for await (const l of col('leads').find(filter).project({ pageId: 1, category: 1 })) {
+    leads++;
+    const cat = String(l.category || '').split(',')[0].trim();
+    if (cat) categories.set(cat, (categories.get(cat) || 0) + 1);
+    chunk.push(l.pageId);
+    if (chunk.length >= LEAD_CHUNK) await flush();
+  }
+  await flush();
+  const data = {
+    ...t.result({ allHooks }),
+    leads,
+    leadsWithAds: withAds,
+    categories: [...categories.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([name, n]) => ({ name, leads: n, pct: leads ? Math.round((n * 100) / leads) : 0 })),
+    at: new Date(),
+  };
+  if (leadCache.size > 200) leadCache.clear();
+  leadCache.set(key, { at: Date.now(), data });
+  return data;
 }

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { ArrowLeft, Copy, ExternalLink, FileSpreadsheet, Lightbulb, Lock, Printer } from 'lucide-react';
+import { ArrowLeft, Copy, ExternalLink, FileSpreadsheet, Lightbulb, Lock, Printer, RefreshCw } from 'lucide-react';
 import { api, download } from '../lib/api';
 import { cn, formatNumber } from '../lib/utils';
 import { Button, EmptyState, PageHeader, Skeleton } from '../components/ui';
@@ -14,7 +14,7 @@ import { usePerk } from '../components/PlanGate';
 const adLink = (id) => `https://www.facebook.com/ads/library/?id=${id}`;
 const taka = (n) => `৳${Number(n).toLocaleString('en')}`;
 
-function Bars({ title, rows, label = (r) => r.name, hint }) {
+function Bars({ title, rows, label = (r) => r.name, hint, unit = 'ads', count = (r) => r.ads }) {
   if (!rows?.length) return null;
   return (
     <section className="card p-5">
@@ -26,7 +26,7 @@ function Bars({ title, rows, label = (r) => r.name, hint }) {
             <div className="flex justify-between text-sm">
               <span className="font-medium">{label(r)}</span>
               <span className="tabular-nums text-slate-500">
-                {formatNumber(r.ads)} ads · <b className="text-slate-700 dark:text-slate-200">{r.pct}%</b>
+                {formatNumber(count(r))} {unit} · <b className="text-slate-700 dark:text-slate-200">{r.pct}%</b>
               </span>
             </div>
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-white/10">
@@ -39,18 +39,29 @@ function Bars({ title, rows, label = (r) => r.name, hint }) {
   );
 }
 
-export default function Insights() {
+/**
+ * scope 'project': one project's ads (/projects/:pid/insights).
+ * scope 'leads': every ad of the leads in view on All Leads — the same filters, carried in the address
+ * (/leads/insights?…; no filter = every lead). A big workspace takes a few seconds; the server keeps it 10 min.
+ */
+export default function Insights({ scope = 'project' }) {
   const { pid } = useParams();
+  const [params] = useSearchParams();
+  const leadsView = scope === 'leads';
+  const search = params.toString();
+  const filtered = [...params.keys()].some((k) => !['sort', 'dir', 'page'].includes(k));
   const [d, setD] = useState(null);
   const [onlyLong, setOnlyLong] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
   // Excel like every other Excel export (a plan perk); Print / PDF works on every plan
   const canExcel = usePerk('excelExport');
   const excel = async () => {
     if (!canExcel) return toast.message('Excel export is not in your plan', { description: 'Print / Save as PDF works on every plan.' });
     setBusy(true);
     try {
-      await download(`/projects/${pid}/insights.xlsx`, `${d?.project?.name || 'project'} - ad insights.xlsx`);
+      if (leadsView) await download(`/leads/insights.xlsx?${search}`, 'All leads - ad insights.xlsx');
+      else await download(`/projects/${pid}/insights.xlsx`, `${d?.project?.name || 'project'} - ad insights.xlsx`);
     } catch (e) {
       toast.error(e.message);
     } finally {
@@ -58,9 +69,21 @@ export default function Insights() {
     }
   };
 
+  const load = useCallback(
+    (fresh = false) => {
+      setLoading(true);
+      const url = leadsView ? `/leads/insights?${search}${fresh ? `${search ? '&' : ''}fresh=1` : ''}` : `/projects/${pid}/insights`;
+      return api(url)
+        .then(setD)
+        .catch((e) => toast.error(e.message))
+        .finally(() => setLoading(false));
+    },
+    [leadsView, search, pid],
+  );
   useEffect(() => {
-    api(`/projects/${pid}/insights`).then(setD).catch((e) => toast.error(e.message));
-  }, [pid]);
+    setD(null);
+    load();
+  }, [load]);
 
   const copy = async (text) => {
     try {
@@ -71,37 +94,68 @@ export default function Insights() {
     }
   };
 
-  if (!d) return <Skeleton className="h-[70vh]" />;
+  if (!d) {
+    return (
+      <div className="space-y-3">
+        {leadsView && (
+          <p className="flex items-center gap-2 text-sm text-slate-500">
+            <RefreshCw className="h-4 w-4 animate-spin" /> Reading the ads of {filtered ? 'the leads in view' : 'all your leads'} — a big list takes a few seconds…
+          </p>
+        )}
+        <Skeleton className="h-[70vh]" />
+      </div>
+    );
+  }
   const hooks = (d.hooks || []).filter((h) => !onlyLong || h.days >= 30);
   const withOffer = d.offers?.length ? Math.max(...d.offers.map((o) => o.pct)) : 0;
+  const back = leadsView ? { to: `/leads${search ? `?${search}` : ''}`, label: 'All Leads' } : { to: `/projects/${pid}`, label: d.project.name };
+  const subtitle = leadsView
+    ? `What the advertisers among ${filtered ? 'the leads in view' : 'all your leads'} say in their ads — ${formatNumber(d.leads)} leads, ${formatNumber(d.leadsWithAds)} with ads. Read from their own text, nothing estimated.`
+    : `What the advertisers for “${d.project.keyword}” (${d.project.country}) say in their ads — read from their own text, nothing estimated`;
 
   return (
     <div className="space-y-6">
-      <Link to={`/projects/${pid}`} className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:underline print:hidden dark:text-indigo-400">
-        <ArrowLeft className="h-4 w-4" /> {d.project.name}
+      <Link to={back.to} className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:underline print:hidden dark:text-indigo-400">
+        <ArrowLeft className="h-4 w-4" /> {back.label}
       </Link>
-      <PageHeader icon={Lightbulb} title="Ad insights" subtitle={`What the advertisers for “${d.project.keyword}” (${d.project.country}) say in their ads — read from their own text, nothing estimated`}
+      <PageHeader icon={Lightbulb} title={leadsView ? 'Ad insights — All Leads' : 'Ad insights'} subtitle={subtitle}
         actions={
-          d.ads > 0 && (
-            <div className="flex gap-2 print:hidden">
-              <Button onClick={excel} loading={busy}>
-                {canExcel ? <FileSpreadsheet className="h-4 w-4" /> : <Lock className="h-4 w-4" />} Excel (all hooks)
+          <div className="flex flex-wrap gap-2 print:hidden">
+            {leadsView && (
+              <Button onClick={() => load(true)} loading={loading} title={d.at ? `Worked out at ${new Date(d.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : undefined}>
+                {!loading && <RefreshCw className="h-4 w-4" />} Refresh
               </Button>
-              <Button onClick={() => window.print()}>
-                <Printer className="h-4 w-4" /> Print / PDF
-              </Button>
-            </div>
-          )
+            )}
+            {d.ads > 0 && (
+              <>
+                <Button onClick={excel} loading={busy}>
+                  {canExcel ? <FileSpreadsheet className="h-4 w-4" /> : <Lock className="h-4 w-4" />} Excel (all hooks)
+                </Button>
+                <Button onClick={() => window.print()}>
+                  <Printer className="h-4 w-4" /> Print / PDF
+                </Button>
+              </>
+            )}
+          </div>
         }
       />
+      {leadsView && filtered && (
+        <p className="-mt-3 text-xs text-slate-500 print:hidden">
+          Only the leads that match the filters on All Leads. <Link to="/leads/insights" className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400">See all leads</Link>
+        </p>
+      )}
 
       {!d.ads ? (
-        <EmptyState icon={Lightbulb} title="No ads yet" text="Insights appear when the search has collected ads." />
+        <EmptyState
+          icon={Lightbulb}
+          title="No ads yet"
+          text={leadsView ? 'None of these leads has ads — leads from pasted links or added by hand have none. Try other filters.' : 'Insights appear when the search has collected ads.'}
+        />
       ) : (
         <>
           <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              ['Ads', formatNumber(d.ads), `${formatNumber(d.analysed)} read for insights`],
+              ['Ads', formatNumber(d.ads), leadsView ? `From ${formatNumber(d.advertisers)} advertisers · ${formatNumber(d.analysed)} read for insights` : `${formatNumber(d.analysed)} read for insights`],
               ['Running 30+ days', formatNumber(d.longRunning), 'An advertiser keeps paying only for an ad that works'],
               ['Most used offer', d.offers?.[0]?.ads ? d.offers[0].offer : '—', d.offers?.[0]?.ads ? `${d.offers[0].pct}% of the ads` : 'No offers found'],
               ['Typical price', d.prices ? taka(d.prices.median) : '—', d.prices ? `Most between ${taka(d.prices.low)} and ${taka(d.prices.high)}` : 'No prices in the ads'],
@@ -176,6 +230,7 @@ export default function Insights() {
             <Bars title="Ad formats" rows={d.formats} />
             <Bars title="How they take orders" hint="From each ad's button and link" rows={d.orderVia} />
             <Bars title="Language of the ads" rows={d.languages} />
+            {leadsView && <Bars title="Categories of the leads" hint="The Page category Facebook shows (the first one)" rows={d.categories} unit="leads" count={(r) => r.leads} />}
             <section className="card p-5">
               <h2 className="font-display font-bold">Top advertisers</h2>
               <div className="mt-3 grid gap-4 sm:grid-cols-2">

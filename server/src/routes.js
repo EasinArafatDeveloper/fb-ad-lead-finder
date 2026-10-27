@@ -11,6 +11,8 @@ import { pullSheet, syncSheet, testSheet } from './sheets.js';
 import { deleteLeads, ensureProject, oid, queuePages, stopPages } from './projects.js';
 import { isOutdated, worker as workerState, workerInfo } from './worker-state.js';
 import { checkLinks, importLinks, previewLinks } from './linkImport.js';
+import { leadsInsights } from './insights.js';
+import { insightsWorkbook, sendWorkbook } from './insightsExcel.js';
 import { allProxies, forgetOldProxies, isBadIp, proxyGroups, proxyPool, proxyStatus } from './proxies.js';
 import { getPc, listPcs, pcName, pcNames, updatePc } from './pcs.js';
 import { accountOf, hasCredits, requirePerk } from './billing.js';
@@ -217,6 +219,17 @@ r.get('/leads/counts', ah(async (req) => {
   const base = buildFilter(req.ws, rest);
   const counts = await Promise.all(Object.values(CONTACT_KINDS).map((c) => col('leads').countDocuments({ $and: [...base.$and, c] })));
   return Object.fromEntries(Object.keys(CONTACT_KINDS).map((k, i) => [k, counts[i]]));
+}));
+
+// Ad insights of the leads in view (the same filters as the list; none = every lead): hooks, offers, prices,
+// formats, how they take orders, top advertisers, categories — read from their ads, no AI (insights.js)
+r.get('/leads/insights', ah(async (req) => leadsInsights(req.ws, buildFilter(req.ws, req.query), { fresh: req.query.fresh === '1' })));
+r.get('/leads/insights.xlsx', ah(async (req, res) => {
+  await requirePerk(req.ws, 'excelExport');
+  const d = await leadsInsights(req.ws, buildFilter(req.ws, req.query), { allHooks: true });
+  const shown = Object.entries(req.query).filter(([k, v]) => v && !['sort', 'dir', 'page', 'per', 'fresh'].includes(k)).map(([k, v]) => `${k}: ${v}`).join(', ');
+  const wb = insightsWorkbook(d, [['Leads', `${d.leads} (${d.leadsWithAds} with ads)`], ['Filters', shown || 'All leads']]);
+  await sendWorkbook(res, wb, `All leads - ad insights - ${stamp()}.xlsx`);
 }));
 
 r.get('/leads/:id', ah(async (req, res) => {
