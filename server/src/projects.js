@@ -28,7 +28,10 @@ const TEMPLATE = [
   { type: 'folder', name: 'Ads', children: [{ type: 'sheet', name: 'All Ads', kind: 'ads', filter: 'all' }] },
 ];
 
-async function createTemplate(ws, projectId) {
+// a project made from pasted links has no ads — only the Leads folder
+const LINKS_TEMPLATE = TEMPLATE.filter((n) => n.name === 'Leads');
+
+async function createTemplate(ws, projectId, template = TEMPLATE) {
   const now = Date.now();
   let i = 0;
   const walk = async (nodes, parentId) => {
@@ -40,7 +43,21 @@ async function createTemplate(ws, projectId) {
       if (n.children) await walk(n.children, insertedId);
     }
   };
-  await walk(TEMPLATE, null);
+  await walk(template, null);
+}
+
+/**
+ * A project made from pasted links (linkImport.js): always a new one — every paste is its own project, kept apart
+ * from the keyword searches (source: 'links'), with only the Leads folder.
+ */
+export async function createLinksProject(ws, name) {
+  const doc = {
+    workspaceId: ws, key: `links|${new ObjectId()}`, name: String(name).trim().slice(0, 120), keyword: String(name).trim().slice(0, 120), country: 'ALL',
+    source: 'links', createdAt: new Date(),
+  };
+  const { insertedId } = await col('projects').insertOne(doc);
+  await createTemplate(ws, insertedId, LINKS_TEMPLATE);
+  return insertedId;
 }
 
 /** Find the workspace's project for a keyword+country, or create it (with the default Leads/Ads folders). */

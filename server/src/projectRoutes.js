@@ -22,7 +22,8 @@ const itemOf = (req, id, extra = {}) => col('items').findOne({ _id: oid(id), wor
 // ---------------- projects ----------------
 r.get('/projects', ah(async (req) => {
   const projects = await col('projects').find({ workspaceId: req.ws }).sort({ createdAt: -1 }).toArray();
-  return Promise.all(projects.map(async (p) => ({ id: String(p._id), name: p.name, keyword: p.keyword, country: p.country, createdAt: p.createdAt, ...(await projectStats(p)) })));
+  // source: 'search' (a keyword in the Ad Library) or 'links' (pasted Page links) — the Projects page tabs
+  return Promise.all(projects.map(async (p) => ({ id: String(p._id), name: p.name, keyword: p.keyword, country: p.country, source: p.source || 'search', createdAt: p.createdAt, ...(await projectStats(p)) })));
 }));
 
 /**
@@ -158,6 +159,7 @@ r.get('/projects/:id/insights.xlsx', ah(async (req, res) => {
 r.post('/projects/:id/search', ah(async (req, res) => {
   const p = await projectOf(req, req.params.id);
   if (!p) return notFound(res, 'Project');
+  if (p.source === 'links') throw httpError(400, 'This project was made from pasted links — paste more links instead (Hunt → Paste links)');
   await checkSearchQuota(req, 1);
   const s = await getSettings();
   const last = await col('jobs').findOne({ projectId: p._id }, { sort: { createdAt: -1 }, projection: { minAds: 1, maxAds: 1, filters: 1 } });
@@ -204,7 +206,7 @@ r.get('/projects/:id/items', ah(async (req, res) => {
   if (req.query.parent && !parent) return notFound(res, 'Folder');
   const items = await col('items').find({ projectId: p._id, parentId: parent ? parent._id : null }).sort({ type: -1, createdAt: 1 }).toArray();
   return {
-    project: { id: String(p._id), name: p.name, keyword: p.keyword, country: p.country, createdAt: p.createdAt, ...(await projectStats(p)) },
+    project: { id: String(p._id), name: p.name, keyword: p.keyword, country: p.country, source: p.source || 'search', createdAt: p.createdAt, ...(await projectStats(p)) },
     path: parent ? await breadcrumb(parent) : [],
     items: await Promise.all(items.map(itemDTO)),
   };

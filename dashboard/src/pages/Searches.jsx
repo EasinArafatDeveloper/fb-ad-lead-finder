@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
-  CheckCircle2, CircleStop, Clock, ExternalLink, FileSearch, FolderOpen, Hourglass, Loader2, Lock, RotateCw, Search, Sparkles, Trash2, X,
+  CheckCircle2, CircleStop, Clock, ExternalLink, FileSearch, FolderOpen, Hourglass, Link2, Loader2, Lock, RotateCw, Search, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { api, extensionHere, kickExtension } from '../lib/api';
 import { COUNTRIES, cn, formatNumber, timeAgo } from '../lib/utils';
@@ -164,9 +164,12 @@ function BoardCard({ j, stage, position, onStop, onRemove, admin }) {
           <span className="flex h-6 min-w-[1.5rem] shrink-0 items-center justify-center rounded-md bg-slate-100 px-1 text-[11px] font-bold text-slate-600 dark:bg-white/10 dark:text-slate-300">#{position}</span>
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate font-semibold leading-tight" title={j.keyword}>{j.keyword}</p>
+          <p className="truncate font-semibold leading-tight" title={j.keyword}>
+            {j.kind === 'links' && <Link2 className="mr-1 inline h-3.5 w-3.5 text-sky-500" aria-label="Pasted links" />}
+            {j.keyword}
+          </p>
           <p className="text-[11px] text-slate-500">
-            {j.country}
+            {j.kind === 'links' ? 'Pasted links' : j.country}
             {j.minAds > 1 && ` · ${j.minAds}+ ads per page`}
             {filterSummary(j.filters) && ` · ${filterSummary(j.filters)}`}
             {stage === 'waiting' && ` · added ${timeAgo(j.createdAt)}`}
@@ -647,9 +650,12 @@ export default function Searches() {
                 return (
                   <tr key={j.id} className={cn('border-b border-slate-50 transition-colors last:border-0 hover:bg-slate-50/60 dark:border-white/5 dark:hover:bg-white/5', empty && 'opacity-60')}>
                     <td className="px-4 py-3">
-                      <div className="font-semibold">{j.keyword}</div>
+                      <div className="font-semibold">
+                        {j.kind === 'links' && <Link2 className="mr-1 inline h-3.5 w-3.5 text-sky-500" aria-label="Pasted links" />}
+                        {j.keyword}
+                      </div>
                       <div className="text-xs text-slate-500">
-                        {j.country}
+                        {j.kind === 'links' ? `Pasted links${j.linkStats ? ` · ${formatNumber(j.linkStats.valid)} Pages` : ''}` : j.country}
                         {j.manual ? ' · from the extension' : ''}
                         {admin && j.pc ? ` · on ${j.pc}` : ''}
                         {j.minAds > 1 ? ` · ${j.minAds}+ ads per page` : ''}
@@ -658,8 +664,14 @@ export default function Searches() {
                     </td>
                     <td className="px-4 py-3"><StageChip stage={st} /></td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {formatNumber(j.adsSeen)}
-                      <div className="text-[11px] text-slate-400">max {formatNumber(j.maxAds)}</div>
+                      {j.kind === 'links' ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <>
+                          {formatNumber(j.adsSeen)}
+                          <div className="text-[11px] text-slate-400">max {formatNumber(j.maxAds)}</div>
+                        </>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
                       {formatNumber(j.pageCount)}
@@ -693,7 +705,7 @@ export default function Searches() {
                           <button title="Stop this search" aria-label="Stop this search" onClick={() => stop(j)} className="rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10">
                             <CircleStop className="h-4 w-4" />
                           </button>
-                        ) : (
+                        ) : j.kind === 'links' ? null : (
                           <button
                             title="Collect again"
                             aria-label="Collect again"

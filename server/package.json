@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --env-file=../.env --watch src/index.js",
-    "test": "node --test test/reader.test.mjs",
+    "test": "node --test test/reader.test.mjs test/links.test.mjs",
     "test:all": "sh ../scripts/test-engine.sh"
   },
   "dependencies": {

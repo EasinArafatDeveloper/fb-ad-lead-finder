@@ -10,6 +10,7 @@ import { AD_HEADERS, CONTACT_KINDS, LEAD_HEADERS, OVERRIDABLE, STATUSES, adRow, 
 import { pullSheet, syncSheet, testSheet } from './sheets.js';
 import { deleteLeads, ensureProject, oid, queuePages, stopPages } from './projects.js';
 import { isOutdated, worker as workerState, workerInfo } from './worker-state.js';
+import { checkLinks, importLinks, previewLinks } from './linkImport.js';
 import { allProxies, forgetOldProxies, isBadIp, proxyGroups, proxyPool, proxyStatus } from './proxies.js';
 import { getPc, listPcs, pcName, pcNames, updatePc } from './pcs.js';
 import { accountOf, hasCredits, requirePerk } from './billing.js';
@@ -419,6 +420,15 @@ r.post('/jobs', ah(async (req) => {
   return { created: docs.length, skipped };
 }));
 
+// ---------------- paste links (linkImport.js): Facebook Page links → a project of their own ----------------
+r.post('/links/preview', ah(async (req) => previewLinks(req.ws, String(req.body?.text || '').slice(0, 300000))));
+r.post('/links/import', ah(async (req) => {
+  const text = String(req.body?.text || '').slice(0, 300000);
+  checkLinks(text); // a wrong paste must not use up a search of the day
+  await checkSearchQuota(req, 1); // one paste = one search (credits left, the plan's searches per day)
+  return importLinks({ ws: req.ws, userId: req.user._id, text, name: req.body?.name });
+}));
+
 r.delete('/jobs/:id', ah(async (req) => {
   await col('jobs').deleteOne({ _id: oid(req.params.id), workspaceId: req.ws, phase: { $ne: 'collecting' } });
   return { ok: true };
@@ -440,6 +450,7 @@ r.post('/jobs/:id/requeue', ah(async (req) => {
   const j = await col('jobs').findOne({ _id: oid(req.params.id), workspaceId: req.ws });
   if (!j) throw httpError(404, 'Search not found');
   if (['queued', 'collecting'].includes(j.phase)) throw httpError(409, 'This search is already running');
+  if (j.kind === 'links') throw httpError(400, 'This was made from pasted links — use Re-scrape on its leads, or paste the links again');
   await checkSearchQuota(req, 1);
   await col('jobs').updateOne({ _id: j._id }, { $set: { phase: 'queued', createdAt: new Date(), adsSeen: 0 }, $unset: { collectedAt: '', stoppedAt: '', note: '', notifiedAt: '' } });
   return { ok: true };
@@ -704,7 +715,7 @@ r.get('/export.xlsx', ah(async (req, res) => {
       added.commit();
     };
   };
-  const addLead = addSheet('Leads', LEAD_HEADERS, [18, 28, 36, 22, 22, 18, 30, 30, 30, 30, 40, 50, 18, 10, 30, 30, 16, 40, 11, 11, 10, 20, 40, 50, 40, 14, 30, 12, 17]);
+  const addLead = addSheet('Leads', LEAD_HEADERS, [18, 28, 36, 22, 22, 18, 30, 30, 30, 30, 40, 50, 18, 10, 30, 30, 16, 40, 11, 11, 10, 20, 40, 50, 40, 14, 30, 12, 17, 14, 10, 18, 18, 16, 16, 40, 30, 16, 14]);
   const pageIds = [];
   for await (const l of leadCursor(req.ws, req.query)) {
     addLead(leadRow(l));

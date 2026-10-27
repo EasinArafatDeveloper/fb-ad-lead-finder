@@ -62,6 +62,8 @@ async function open() {
     db.collection('pages').createIndex({ scrapeStatus: 1, wantedBy: 1, createdAt: 1 }),
     // "advertising the longest" sort and the "advertising N+ days" filter (adFacts.js)
     db.collection('leads').createIndex({ workspaceId: 1, firstAdDate: 1 }),
+    // All Leads → Source: pasted links / searches (linkImport.js)
+    db.collection('leads').createIndex({ workspaceId: 1, sources: 1 }),
     // big workbooks, stored in parts (projects.js storeWorkbook)
     db.collection('sheetblobs').createIndex({ blobId: 1, n: 1 }),
     db.collection('sheetblobs').createIndex({ sheetId: 1 }),

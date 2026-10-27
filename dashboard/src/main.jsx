@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard';
 import Explorer from './pages/Explorer';
 import Insights from './pages/Insights';
 import Searches from './pages/Searches';
+import PasteLinks from './pages/PasteLinks';
 import Leads from './pages/Leads';
 import Settings from './pages/Settings';
 import Billing from './pages/Billing';
@@ -88,6 +89,7 @@ function App() {
             }
           />
           <Route path="search" element={<Searches />} />
+          <Route path="links" element={<PasteLinks />} />
           <Route path="leads" element={<Leads />} />
           <Route path="settings" element={<Settings />} />
           <Route path="billing" element={<Billing />} />

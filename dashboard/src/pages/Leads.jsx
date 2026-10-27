@@ -129,7 +129,7 @@ function LeadForm({ lead, onClose, onSaved }) {
 }
 
 // ---------------- shortlist: filters & sort ----------------
-const EMPTY = { q: '', kw: '', status: '', need: '', has: '', scrape: '', cat: '', country: '', minFollowers: '', minAds: '', days: '', via: '', format: '', site: '', platform: '', minRunDays: '', offer: '', sort: 'updatedAt', dir: 'desc' };
+const EMPTY = { q: '', kw: '', status: '', need: '', has: '', scrape: '', cat: '', country: '', minFollowers: '', minAds: '', days: '', via: '', format: '', site: '', platform: '', minRunDays: '', offer: '', source: '', sort: 'updatedAt', dir: 'desc' };
 const SORT_OPTIONS = [
   ['updatedAt:desc', 'Recently updated'],
   ['contacts:desc', 'Most contacts (phone + email)'],
@@ -156,6 +156,8 @@ const CHIP_ON = {
   slate: 'border-slate-400 bg-slate-100 text-slate-800 dark:border-white/30 dark:bg-white/10 dark:text-white',
 };
 const SELECTS = (meta) => [
+  // where the lead came from: a keyword search or a pasted list of links (server: leads.js buildFilter)
+  ['source', 'From anywhere', [['search', 'From searches'], ['links', 'From pasted links']]],
   ['kw', 'All keywords', meta.keywords.map((k) => [k, k])],
   ['status', 'Any status', STATUSES.map((s) => [s, s])],
   ['minFollowers', 'Any followers', [['1000', '1K+ followers'], ['10000', '10K+ followers'], ['100000', '100K+ followers'], ['1000000', '1M+ followers']]],

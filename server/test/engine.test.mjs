@@ -1345,3 +1345,71 @@ test('Ad Library pace: normal computers get the fast pace (1.5–3.5 s, short wa
     await col('pcs').deleteMany({});
   }
 });
+
+test('Paste links: Pages from links get their own project (source links), known Pages are reused, fresh ones handed over at once, the rest read; Source filter and export column', async () => {
+  await B.ensurePlans();
+  const LI = await import('../src/linkImport.js');
+  const { buildFilter, leadRow, LEAD_HEADERS } = await import('../src/leads.js');
+  const c = await customer(50, { plan: 'starter' });
+  const now = new Date();
+  // two Pages the engine already knows from a keyword search: one read today, one read two months ago
+  await col('pages').insertMany([
+    { pageId: '777000111', pageName: 'Known Shop', pageUrl: 'https://www.facebook.com/KnownShop/', scrapeStatus: 'done', scrapedAt: now, phones: ['+8801711000000'], emails: [], retries: 0, createdAt: now },
+    { pageId: '777000222', pageName: 'Old Shop', pageUrl: 'https://www.facebook.com/OldShop/', scrapeStatus: 'done', scrapedAt: new Date(Date.now() - 60 * 864e5), phones: [], emails: [], retries: 0, createdAt: now },
+  ]);
+  // the customer found Known Shop with a search before (an old lead: no "sources" yet)
+  await col('leads').insertOne({ workspaceId: c.ws, pageId: '777000111', keywords: ['shoes'], status: 'Contacted', overrides: [], scrapeStatus: 'done', charged: true, createdAt: now, updatedAt: now });
+  const text = [
+    'Known Shop - https://www.facebook.com/KnownShop',
+    'facebook.com/oldshop',
+    'https://www.facebook.com/profile.php?id=100064000000001',
+    'https://m.facebook.com/NewShop/',
+    'https://facebook.com/newshop',
+    'https://www.facebook.com/groups/1234567',
+  ].join('\n');
+
+  const pv = await LI.previewLinks(c.ws, text);
+  assert.equal(pv.valid, 4);
+  assert.equal(pv.duplicates, 1, 'NewShop twice');
+  assert.equal(pv.invalidCount, 1, 'the group link');
+  assert.equal(pv.inLeads, 1, 'Known Shop is already a lead (found by its username)');
+  assert.equal(pv.alreadyRead, 1, 'Known Shop was read today');
+  assert.equal(pv.toRead, 3);
+  assert.equal(await col('projects').countDocuments({ workspaceId: c.ws }), 0, 'the preview saves nothing');
+
+  const r = await LI.importLinks({ ws: c.ws, userId: c.user._id, text, name: 'Clients list' });
+  assert.equal(r.pages, 4);
+  const project = await col('projects').findOne({ _id: new ObjectId(r.projectId) });
+  assert.equal(project.source, 'links', 'a project of its own, marked as pasted links');
+  assert.equal(project.name, 'Clients list');
+  const items = await col('items').find({ projectId: project._id, parentId: null }).toArray();
+  assert.deepEqual(items.map((i) => i.name), ['Leads'], 'no Ads folder — there are no ads');
+  const job = await col('jobs').findOne({ _id: new ObjectId(r.jobId) });
+  assert.equal(job.kind, 'links');
+  assert.equal(job.phase, 'collected', 'no Ad Library step');
+  assert.deepEqual([...job.pageIds].sort(), ['100064000000001', '777000111', '777000222', '@newshop']);
+  assert.equal((await page('@newshop')).pageUrl, 'https://www.facebook.com/newshop/');
+  assert.equal((await page('777000222')).scrapeStatus, 'pending', 'read two months ago → read again');
+  assert.equal(await col('pages').countDocuments({ pageId: '@knownshop' }), 0, 'Known Shop is reused, not added twice');
+  const known = await col('leads').findOne({ workspaceId: c.ws, pageId: '777000111' });
+  assert.deepEqual([...known.sources].sort(), ['links', 'search'], 'from a search before, and pasted now');
+  assert.equal(known.status, 'Contacted', "the customer's own status stays");
+  assert.deepEqual(known.phones, ['+8801711000000'], 'read today → the data is there at once');
+
+  await run(); // the server reader reads the other three
+  for (const id of ['777000222', '100064000000001', '@newshop']) {
+    const l = await col('leads').findOne({ workspaceId: c.ws, pageId: id });
+    assert.equal(l.scrapeStatus, 'done', `${id} read`);
+    assert.deepEqual(l.emails, ['a@shop.com']);
+    assert.ok(l.projectIds.some((p) => String(p) === r.projectId));
+  }
+  assert.equal(await col('leads').countDocuments(buildFilter(c.ws, { source: 'links' })), 4, 'Source: pasted links');
+  assert.equal(await col('leads').countDocuments(buildFilter(c.ws, { source: 'search' })), 1, 'Source: searches');
+  const src = LEAD_HEADERS.indexOf('Source');
+  assert.ok(src > 0, 'export has a Source column');
+  assert.equal(leadRow(known)[src], 'search + links');
+  assert.equal(leadRow(await col('leads').findOne({ workspaceId: c.ws, pageId: '@newshop' }))[src], 'links');
+
+  assert.throws(() => LI.checkLinks('https://www.facebook.com/groups/1'), /No Facebook Page link/);
+  assert.throws(() => LI.checkLinks(Array.from({ length: LI.LINKS_MAX + 1 }, (_, i) => `https://www.facebook.com/shop${i}`).join('\n')), /At most 500/);
+});

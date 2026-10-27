@@ -168,7 +168,8 @@ export async function ingestAds(job, rawAds) {
       {
         $setOnInsert: { workspaceId: job.workspaceId, pageId, createdAt: now, status: 'New', notes: '', overrides: [], syncedAt: null },
         $set: { updatedAt: now },
-        $addToSet: { keywords: job.keyword, jobIds: job.id, projectIds: { $each: job.projectId ? [job.projectId] : [] } },
+        // sources: where the lead came from — 'search' (here) and/or 'links' (pasted, linkImport.js)
+        $addToSet: { keywords: job.keyword, jobIds: job.id, projectIds: { $each: job.projectId ? [job.projectId] : [] }, sources: 'search' },
       },
       { upsert: true },
     );
@@ -485,6 +486,9 @@ export function buildFilter(ws, q = {}) {
   if (s(q.kw)) and.push({ keywords: s(q.kw) });
   if (s(q.status)) and.push({ status: s(q.status) });
   if (s(q.jobId)) and.push({ jobIds: s(q.jobId) });
+  // where the lead came from: pasted links, or a keyword search (leads from before this was kept count as search)
+  if (q.source === 'links') and.push({ sources: 'links' });
+  else if (q.source === 'search') and.push({ $or: [{ sources: 'search' }, { sources: { $exists: false } }] });
   if (q.scrape === 'pending') and.push({ scrapeStatus: { $in: ['pending', 'working'] } });
   else if (s(q.scrape)) and.push({ scrapeStatus: s(q.scrape) });
   if (q.has === 'email') and.push({ 'emails.0': { $exists: true } });
@@ -567,7 +571,10 @@ export const LEAD_HEADERS = [
   'Status', 'Notes', 'Scrape Status', 'Scraped At',
   'Advertising Since', 'Running Days', 'Orders Via', 'Ad Formats', 'Website Type', 'Website Platform',
   'Best Ad Hook', 'Offers', 'Price Range',
+  'Source',
 ];
+/** "search", "links" or both — where the lead came from (old leads: search). */
+const sourceOf = (l) => (l.sources?.length ? [...l.sources].sort().reverse().join(' + ') : 'search');
 
 export const leadRow = (l) => [
   l.pageId,
@@ -608,6 +615,7 @@ export const leadRow = (l) => [
   l.ins?.bestHook || '',
   (l.ins?.offers || []).join(', '),
   priceRange(l.ins),
+  sourceOf(l),
 ];
 
 /** "৳950 – ৳2,450" from the insights' price range. */

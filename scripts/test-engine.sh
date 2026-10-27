@@ -24,8 +24,8 @@ until docker exec "$ID-mongo" mongosh --quiet --eval 'db.runCommand({ ping: 1 })
 TESTS="-v $ROOT/server/test:/app/server/test:ro"
 FAILED=0
 
-echo "== 1) reader unit tests"
-docker run --rm $TESTS "$IMAGE" node --test test/reader.test.mjs || FAILED=1
+echo "== 1) reader + link unit tests"
+docker run --rm $TESTS "$IMAGE" node --test test/reader.test.mjs test/links.test.mjs || FAILED=1
 
 echo "== 2) engine scenarios (empty test database)"
 docker run --rm --network "$ID" -e MONGODB_URI="$MONGO" -e DB_NAME=engine_test $TESTS "$IMAGE" node --test --test-concurrency=1 test/engine.test.mjs || FAILED=1

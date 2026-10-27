@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
   ArrowDownWideNarrow, ArrowLeft, ArrowUp, ChevronRight, ExternalLink, FolderOpen, FolderPlus, FilePlus2, HardDrive, LayoutGrid, List,
-  Pencil, Play, RefreshCw, Search, Trash2, RotateCw, Plus, Globe2, Lightbulb,
+  Pencil, Play, RefreshCw, Search, Trash2, RotateCw, Plus, Globe2, Lightbulb, Link2,
 } from 'lucide-react';
 import { api, kickExtension } from '../lib/api';
 import { useFolderNav } from '../lib/nav';
@@ -259,13 +259,18 @@ function ProjectDetails({ project, onCollect, onDelete, onContinue }) {
   if (!project) return null;
   const phase = PHASE[project.phase] || PHASE.done;
   const scraped = Math.max(0, project.leads - project.pending);
+  const links = project.source === 'links';
   return (
     <div className="card sticky top-24 overflow-hidden">
       <div className="relative flex flex-col items-center bg-gradient-to-br from-indigo-50 via-white to-cyan-50 px-5 pb-5 pt-6 text-center dark:from-indigo-500/10 dark:via-slate-900 dark:to-cyan-500/10">
         <FolderIcon size={88} peek={project.leads > 0} accent />
         <h2 className="mt-3 font-display text-lg font-extrabold leading-tight">{project.name}</h2>
         <p className="mt-0.5 text-xs text-slate-500">
-          {project.country} · {project.runs} search run{project.runs === 1 ? '' : 's'}
+          {links ? (
+            <span className="inline-flex items-center gap-1 font-semibold text-sky-600 dark:text-sky-300"><Link2 className="h-3.5 w-3.5" /> Pasted links</span>
+          ) : (
+            <>{project.country} · {project.runs} search run{project.runs === 1 ? '' : 's'}</>
+          )}
         </p>
         <Badge tone={phase.tone} dot={project.phase === 'done' ? true : 'pulse'} className="mt-3">
           {phase.label}
@@ -275,7 +280,7 @@ function ProjectDetails({ project, onCollect, onDelete, onContinue }) {
         {[
           ['Leads', project.leads],
           ['With contact', project.withContact],
-          ['Ads', project.ads],
+          links ? ['Read', scraped] : ['Ads', project.ads],
           ['In queue', project.pending],
         ].map(([k, v]) => (
           <div key={k} className="bg-white p-3.5 dark:bg-slate-900">
@@ -297,18 +302,28 @@ function ProjectDetails({ project, onCollect, onDelete, onContinue }) {
             <Play className="h-4 w-4" /> Restart {project.stopped} stopped pages
           </Button>
         )}
-        <Link to={`/projects/${project.id}/insights`} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700">
-          <Lightbulb className="h-4 w-4" /> Ad insights — hooks, offers, prices
-        </Link>
-        <Button variant="soft" className="w-full" onClick={onCollect}>
-          <RotateCw className="h-4 w-4" /> Collect more ads
-        </Button>
+        {links ? (
+          <Link to="/links" className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700">
+            <Link2 className="h-4 w-4" /> Paste more links
+          </Link>
+        ) : (
+          <>
+            <Link to={`/projects/${project.id}/insights`} className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700">
+              <Lightbulb className="h-4 w-4" /> Ad insights — hooks, offers, prices
+            </Link>
+            <Button variant="soft" className="w-full" onClick={onCollect}>
+              <RotateCw className="h-4 w-4" /> Collect more ads
+            </Button>
+          </>
+        )}
         <Button variant="ghost" className="w-full text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-500/10" onClick={onDelete}>
           <Trash2 className="h-4 w-4" /> Delete project
         </Button>
-        <a href={adLibUrl(project)} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-indigo-600">
-          View in the Ad Library <ExternalLink className="h-3.5 w-3.5" />
-        </a>
+        {!links && (
+          <a href={adLibUrl(project)} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-indigo-600">
+            View in the Ad Library <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        )}
         <p className="text-center text-[11px] text-slate-400">Created {timeAgo(project.createdAt)}</p>
       </div>
     </div>
@@ -357,6 +372,10 @@ export default function Explorer() {
   const [removingEmpty, setRemovingEmpty] = useState(false);
 
   const atRoot = !pid;
+  // Projects tabs: every project, the keyword searches, or the lists made from pasted links (in the address bar)
+  const [params, setParams] = useSearchParams();
+  const source = ['search', 'links'].includes(params.get('source')) ? params.get('source') : 'all';
+  const setSource = (s) => setParams(s === 'all' ? {} : { source: s }, { replace: true });
 
   // a project that is collecting or reading pages refreshes every 3 s, otherwise every 20 s
   const busyRef = useRef(false);
@@ -417,13 +436,16 @@ export default function Explorer() {
   }, [load]);
 
   const items = useMemo(() => {
-    const list = atRoot ? (projects || []).map((p) => ({ ...p, type: 'project' })) : data?.items || [];
+    const list = atRoot
+      ? (projects || []).filter((p) => source === 'all' || (p.source || 'search') === source).map((p) => ({ ...p, type: 'project' }))
+      : data?.items || [];
     // projects are ranked over the whole list, so "#3" stays #3 while you type in the search box
     if (atRoot) [...list].sort(SORTS[sort].cmp).forEach((p, i) => (p.rank = i + 1));
     const q = filter.trim().toLowerCase();
     const shown = q ? list.filter((i) => i.name.toLowerCase().includes(q)) : list;
     return atRoot ? shown.sort((a, b) => a.rank - b.rank) : shown;
-  }, [atRoot, projects, data, filter, sort]);
+  }, [atRoot, projects, data, filter, sort, source]);
+  const countOf = (s) => (projects || []).filter((p) => s === 'all' || (p.source || 'search') === s).length;
   const showRank = atRoot && SORTS[sort].rank;
 
   const setViewMode = (v) => {
@@ -496,7 +518,7 @@ export default function Explorer() {
   const itemActions = (item) => [
     { label: 'Open', icon: FolderOpen, hint: 'Enter', run: () => open(item) },
     { label: 'Rename', icon: Pencil, hint: 'F2', run: () => rename(item) },
-    ...(item.type === 'project' ? [{ label: 'Collect more ads', icon: RotateCw, run: () => collectMore(item) }] : []),
+    ...(item.type === 'project' && item.source !== 'links' ? [{ label: 'Collect more ads', icon: RotateCw, run: () => collectMore(item) }] : []),
     '-',
     { label: 'Delete', icon: Trash2, hint: 'Del', danger: true, run: () => setConfirm({ item }) },
   ];
@@ -575,6 +597,32 @@ export default function Explorer() {
             <Button variant="primary" onClick={() => navigate('/search?new=1')}>
               <Plus className="h-4 w-4" /> New search
             </Button>
+            <Button onClick={() => navigate('/links')}>
+              <Link2 className="h-4 w-4 text-sky-500" /> Paste links
+            </Button>
+            <div className="flex rounded-xl border border-slate-200 bg-white p-0.5 dark:border-white/10 dark:bg-slate-900" role="tablist" aria-label="Show projects">
+              {[
+                ['all', 'All'],
+                ['search', 'Searches'],
+                ['links', 'Pasted links'],
+              ].map(([k, label]) => (
+                <button
+                  key={k}
+                  role="tab"
+                  aria-selected={source === k}
+                  onClick={() => setSource(k)}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition',
+                    source === k ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200' : 'text-slate-500 hover:text-slate-800 dark:hover:text-white',
+                  )}
+                >
+                  {k === 'links' && <Link2 className="h-3.5 w-3.5" />}
+                  {k === 'search' && <Search className="h-3.5 w-3.5" />}
+                  {label}
+                  <span className="tabular-nums text-[10px] opacity-70">{projects ? countOf(k) : ''}</span>
+                </button>
+              ))}
+            </div>
             {empty?.count > 0 && (
               <Button
                 variant="ghost"
@@ -668,13 +716,25 @@ export default function Explorer() {
           ) : !items.length ? (
             <EmptyState
               icon={atRoot ? Globe2 : FolderOpen}
-              title={filter ? 'Nothing found' : atRoot ? 'No projects yet' : 'This folder is empty'}
-              text={atRoot ? 'Start a search with a keyword. Each keyword gets its own project folder.' : 'Right-click to create a new folder or sheet.'}
+              title={filter ? 'Nothing found' : atRoot ? (source === 'links' ? 'No pasted lists yet' : 'No projects yet') : 'This folder is empty'}
+              text={
+                atRoot
+                  ? source === 'links'
+                    ? 'Paste Facebook Page links — each list becomes its own project here.'
+                    : 'Start a search with a keyword. Each keyword gets its own project folder.'
+                  : 'Right-click to create a new folder or sheet.'
+              }
               action={
                 atRoot ? (
-                  <Button variant="primary" onClick={() => navigate('/search?new=1')}>
-                    <Plus className="h-4 w-4" /> New search
-                  </Button>
+                  source === 'links' ? (
+                    <Button variant="primary" onClick={() => navigate('/links')}>
+                      <Link2 className="h-4 w-4" /> Paste links
+                    </Button>
+                  ) : (
+                    <Button variant="primary" onClick={() => navigate('/search?new=1')}>
+                      <Plus className="h-4 w-4" /> New search
+                    </Button>
+                  )
                 ) : null
               }
             />
@@ -706,6 +766,11 @@ export default function Explorer() {
                     </span>
                     <span className="mt-1.5 line-clamp-2 w-full break-words text-[13px] font-semibold leading-snug text-slate-800 dark:text-slate-100">{item.name}</span>
                     <span className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{subtitle(item)}</span>
+                    {item.type === 'project' && item.source === 'links' && (
+                      <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">
+                        <Link2 className="h-3 w-3" /> Pasted links
+                      </span>
+                    )}
                     {item.type === 'project' && item.phase !== 'done' && (
                       <Badge tone={PHASE[item.phase]?.tone} dot="pulse" className="mt-1.5 px-2 py-0 text-[10px]">
                         {PHASE[item.phase]?.label}
@@ -748,7 +813,7 @@ export default function Explorer() {
                         {item.name}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-slate-500">{item.type === 'sheet' ? 'Sheet' : item.type === 'project' ? 'Project' : 'Folder'}</td>
+                    <td className="px-3 py-2 text-slate-500">{item.type === 'sheet' ? 'Sheet' : item.type === 'project' ? (item.source === 'links' ? 'Pasted links' : 'Search') : 'Folder'}</td>
                     <td className="px-3 py-2 tabular-nums text-slate-500">{subtitle(item)}</td>
                     <td className="hidden px-3 py-2 text-slate-500 sm:table-cell">{timeAgo(item.createdAt)}</td>
                   </tr>
