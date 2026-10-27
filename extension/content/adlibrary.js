@@ -313,6 +313,7 @@
     let lastNewAt = Date.now();
     let rounds = 0;
     let hiddenToldAt = 0;
+    let endedAtTotal = null; // set when the search ended because every ad Facebook counts is here
     while ((byPages === 'fallback' || byPages === 'scroll') && !stopRequested) {
       // Facebook loads more ads only while this tab is visible. In the background nothing new arrives — that is
       // NOT the end of the results: wait (keep the heartbeat going) instead of finishing with what we have.
@@ -337,7 +338,8 @@
       // every few scrolls ask the server whether this search was stopped from the dashboard
       if (++rounds % 3 === 0) {
         // also the heartbeat: the server knows this tab is alive (silent 1 min = "not responding" on the Dashboard)
-        const note = stall >= 3 ? `Facebook loads no more ads here — ${pagerError || 'See more does nothing'}` : '';
+        // (no "stuck" note when Facebook simply has no more ads — near its own result count)
+        const note = stall >= 3 && !nearEndOfResults(current().length) ? `Facebook loads no more ads here — ${pagerError || 'See more does nothing'}` : '';
         const st = await send({ type: 'adlib:jobStatus', jobId: job.id, note });
         if (disconnected) break;
         if (st && st.phase === 'stopped') {
@@ -353,13 +355,24 @@
         last = n;
         lastNewAt = Date.now();
       }
-      // the end of the results: no new ads after 8 scrolls AND for 45 s, with the tab in front the whole time
-      // (Facebook is sometimes slow — 6 quick scrolls used to end big searches early)
+      // the end of the results, the quick way: nothing new for a few scrolls and we already have about as many ads
+      // as Facebook says the search has ("~51 results" — rounded, and it counts some ads twice): finished, no warning
+      const total = shownTotal();
+      if (stall >= 3 && nearEndOfResults(n)) {
+        endedAtTotal = total;
+        break;
+      }
+      // the end of the results otherwise: no new ads after 8 scrolls AND for 45 s, with the tab in front the whole
+      // time (Facebook is sometimes slow — 6 quick scrolls used to end big searches early)
       if (stall >= 8 && Date.now() - lastNewAt > 45000) break;
+      // far from Facebook's own count and nothing new: that is when the connection may be limited
+      const farBehind = total == null || n < total * 0.5;
       statusText =
         stall >= 3
-          ? `⚠ Facebook is not loading more ads on this connection (${n} so far). Reason: ${pagerError || 'its "See more" does nothing'}. ` +
-            'Log in to Facebook in this Chrome, or use a home/residential internet IP — Facebook often blocks server (datacenter) IPs.'
+          ? farBehind
+            ? `⚠ Facebook is not loading more ads on this connection (${n}${total != null ? ` of ~${total}` : ''} so far). Reason: ${pagerError || 'its "See more" does nothing'}. ` +
+              'If this happens on every search: log in to Facebook in this Chrome, or use a home/residential internet IP — Facebook often limits server (datacenter) IPs.'
+            : `Facebook loads no more ads right now (${n} of ~${total}) — trying a little longer, then finishing with what is here`
           : minAds > 1
             ? `Scrolling… (${n} ads) — pages with ${minAds}+ ads are picked at the end`
             : `Scrolling… (${n} ads)`;
@@ -394,10 +407,11 @@
       manual: !!finished.manual,
       stats: { captured, pagesTotal: m.totalPages, pagesMatched: minAds > 1 ? m.pages : m.totalPages, minAds },
     });
+    const allHere = endedAtTotal != null ? ` That is every ad of this search (Facebook shows ~${endedAtTotal}; its count is rounded).` : '';
     statusText =
       minAds > 1
-        ? `✓ Collected — ${m.pages} of ${m.totalPages} pages run ${minAds}+ ads. Contacts are read for these ${m.pages} pages only.`
-        : `✓ Collected — ${sent.size} ads sent to the server.`;
+        ? `✓ Collected — ${m.pages} of ${m.totalPages} pages run ${minAds}+ ads. Contacts are read for these ${m.pages} pages only.${allHere}`
+        : `✓ Collected — ${sent.size} ads sent to the server.${allHere}`;
     render();
     watchProgress(finished.id);
   }
@@ -545,6 +559,22 @@
     panel.querySelector('[data-k="open"]').hidden = !lastJob || disconnected;
     panel.querySelector('.fblf-stop').disabled = !running;
     panel.classList.toggle('fblf-running', running);
+  }
+
+  /** Facebook's own count of this search ("~51 results", "~1.2K results") as a number, or null when not shown. */
+  function shownTotal() {
+    const m = resultsHint.match(/~?\s?([\d,.]+)\s?([KkMm]?)\s+results?/);
+    if (!m) return null;
+    const n = Number(m[1].replace(/,/g, '')) * ({ k: 1e3, m: 1e6 }[m[2].toLowerCase()] || 1);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  }
+  /**
+   * About as many ads here as Facebook says the search has: the end of the results, not a blocked connection.
+   * Its count is rounded and counts some ads twice (versions), so 85% of it — or at most 3 short for a tiny one.
+   */
+  function nearEndOfResults(n) {
+    const total = shownTotal();
+    return total != null && n > 0 && (n >= total * 0.85 || total - n <= 3);
   }
 
   // "~1,200 results" text from the page
