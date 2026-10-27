@@ -5,6 +5,8 @@
 import { col } from './db.js';
 
 const ONLINE_MS = 2 * 60 * 1000;
+// the same as worker.js limitRestMs (kept here so pcs.js doesn't import the worker routes)
+const restMs = (p) => (p.gentle === true ? 60 * 60e3 : 30 * 60e3);
 const lastWrite = new Map();
 
 export function pcIdOf(req) {
@@ -59,7 +61,8 @@ export async function listPcs(workspaceId = null) {
     takeQueue: p.takeQueue !== false,
     // Gentle mode (worker.js GENTLE): fewer, slower searches - for a server/datacenter IP that Facebook limits sooner
     gentle: p.gentle === true,
-    restingUntil: p.gentle && p.limitedAt && Date.now() - new Date(p.limitedAt).getTime() < 60 * 60e3 ? new Date(new Date(p.limitedAt).getTime() + 60 * 60e3) : null,
+    // after Facebook's "slow down" every computer rests (worker.js limitRestMs: Gentle 60 min, others 30 min)
+    restingUntil: p.limitedAt && Date.now() - new Date(p.limitedAt).getTime() < restMs(p) ? new Date(new Date(p.limitedAt).getTime() + restMs(p)) : null,
     collecting: running.filter((j) => j.collector === p._id).map((j) => j.keyword),
     oldVersion: p._id.startsWith('ip-'),
     team: !p.workspaceId,

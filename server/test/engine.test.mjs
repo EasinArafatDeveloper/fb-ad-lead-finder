@@ -1297,7 +1297,49 @@ test('Gentle mode is per computer: smaller searches, slower pace, a 10-minute ga
     const c = await next(NORMAL_PC);
     assert.equal(c.job.keyword, 'next');
     assert.equal(c.job.maxAds, 10000);
-    assert.equal(c.job.pace, null);
+    assert.deepEqual(c.job.pace, W2.NORMAL, 'a normal computer gets the normal (fast) pace');
+  } finally {
+    srv.close();
+    await col('pcs').deleteMany({});
+  }
+});
+
+test('Ad Library pace: normal computers get the fast pace (1.5–3.5 s, short waits on "slow down") — also for "Collect this search"; a limited computer rests 30 min and another one takes the search', async () => {
+  await col('pcs').deleteMany({});
+  const { createApp } = await import('../src/app.js');
+  const W2 = await import('../src/worker.js');
+  assert.deepEqual(W2.NORMAL.pageDelay, [1500, 3500], 'the speed of v3.5.1');
+  assert.ok(W2.NORMAL.limitWaits.reduce((a, b) => a + b, 0) <= 10, 'at most ~10 min of waiting on "slow down" (was ~1 hour)');
+  assert.ok(W2.NORMAL.breakEvery >= 100, 'long breaks only rarely');
+  await col('workspaces').updateOne({ _id: WS }, { $set: { plan: 'internal' } }, { upsert: true });
+  await col('users').updateOne({ role: 'admin', workspaceId: WS }, { $set: { role: 'admin', workspaceId: WS, email: `admin${Date.now()}@x.com`, createdAt: new Date(0) } }, { upsert: true });
+  const LIMITED = 'cccccccc-2222-4333-8444-555555555555';
+  const OTHER = 'dddddddd-2222-4333-8444-555555555555';
+  const srv = createApp().listen(0);
+  const base = `http://127.0.0.1:${srv.address().port}/api/worker`;
+  const H = (pc) => ({ 'x-api-key': process.env.WORKER_KEY || 'test-worker-key', 'x-ext-version': '3.6.0', 'x-ext-pc': pc, 'content-type': 'application/json' });
+  const next = async (pc) => (await fetch(`${base}/next-collect`, { headers: H(pc) })).json();
+  try {
+    await col('jobs').insertOne({ workspaceId: WS, keyword: 'first', country: 'BD', phase: 'queued', maxAds: 5000, createdAt: new Date() });
+    const a = await next(LIMITED);
+    await new Promise((r) => setTimeout(r, 50)); // the computer is remembered on its first contact
+    assert.equal(a.job.keyword, 'first');
+    assert.deepEqual(a.job.pace, W2.NORMAL);
+    // Facebook: "slow down" → the search ends, this computer rests
+    await fetch(`${base}/job/${a.job.id}?note=${encodeURIComponent('Facebook rate limit after 30 ads — finished there')}`, { headers: H(LIMITED) });
+    await col('jobs').updateOne({ _id: new ObjectId(a.job.id) }, { $set: { phase: 'collected', collectedAt: new Date(Date.now() - 5 * 60e3) } });
+    await col('jobs').insertOne({ workspaceId: WS, keyword: 'second', country: 'BD', phase: 'queued', maxAds: 5000, createdAt: new Date() });
+    const b = await next(LIMITED);
+    assert.equal(b.job, null, 'the limited computer takes no new search for a while');
+    assert.match(b.reason, /resting after Facebook asked to slow down/);
+    const c = await next(OTHER);
+    assert.equal(c.job?.keyword, 'second', 'another computer takes it');
+    const pcs = (await (await import('../src/pcs.js')).listPcs()).find((p) => p.id === LIMITED);
+    assert.ok(pcs.restingUntil, 'the Computers list shows the rest');
+    // "Collect this search" from the Ad Library panel gets the same pace
+    await col('jobs').updateMany({}, { $set: { phase: 'collected' } });
+    const m = await (await fetch(`${base}/manual-job`, { method: 'POST', headers: H(OTHER), body: JSON.stringify({ keyword: 'manual', country: 'BD' }) })).json();
+    assert.deepEqual(m.job?.pace, W2.NORMAL, 'manual collect is fast too');
   } finally {
     srv.close();
     await col('pcs').deleteMany({});

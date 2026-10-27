@@ -34,8 +34,24 @@ export const GENTLE = {
   pageDelay: [8000, 14000], // between two pages of ads
   breakEvery: 20, // pages
   breakMs: [120000, 180000],
-  limitWaits: [5, 10, 20], // minutes; still limited after these: the search ends with what it has
+  limitWaits: [5, 10], // minutes; still limited after these: the search ends with what it has
 };
+
+// The pace of a normal computer (home internet), sent with every search — the extension (v3.6+) uses it instead of
+// its own built-in slower pace (3–6 s a page, a 60–90 s break every 40 pages, up to ~1 h of waiting on "slow down"),
+// which halved the ads per minute. This is the speed of v3.5.1 (1.5–3.5 s a page) with a short break now and then.
+// On "Rate limit exceeded" it waits 2 min, then 5 min; still limited: the search ends with what it has (instead of
+// waiting an hour for a few more ads) and that computer rests (LIMIT_REST_MS) so another one can take the next search.
+export const NORMAL = {
+  pageDelay: [1500, 3500],
+  breakEvery: 100,
+  breakMs: [20000, 40000],
+  limitWaits: [2, 5],
+};
+/** After "slow down" a computer takes no new search for this long (another computer of the account can). */
+export const LIMIT_REST_MS = 30 * 60e3;
+export const paceFor = (pc) => (pc?.gentle === true ? GENTLE : NORMAL);
+export const limitRestMs = (pc) => (pc?.gentle === true ? GENTLE.restAfterLimitMs : LIMIT_REST_MS);
 
 /** Searches whose Ad Library tab went silent: closed with everything collected so far (called every minute). */
 export async function closeStaleCollects() {
@@ -127,8 +143,10 @@ r.get('/next-collect', ah(async (req) => {
   // a short break between two searches on the same computer: searches started back to back made Facebook
   // answer "Rate limit exceeded" (sooner on server/datacenter IPs)
   const gentle = pc?.gentle === true;
-  if (gentle && pc.limitedAt && Date.now() - new Date(pc.limitedAt).getTime() < GENTLE.restAfterLimitMs) {
-    const until = new Date(new Date(pc.limitedAt).getTime() + GENTLE.restAfterLimitMs);
+  // Facebook said "slow down" to this computer a short while ago (any computer, not only Gentle ones): it rests,
+  // so the next search goes to another computer of the account instead of waiting on this IP's limit
+  if (pc?.limitedAt && Date.now() - new Date(pc.limitedAt).getTime() < limitRestMs(pc)) {
+    const until = new Date(new Date(pc.limitedAt).getTime() + limitRestMs(pc));
     await noteWait(req.pcId, 'rest', until);
     return { job: null, reason: `resting after Facebook asked to slow down - next search after ${fmtTime(until)}` };
   }
@@ -150,7 +168,7 @@ r.get('/next-collect', ah(async (req) => {
   if (!j) return { job: null, reason: 'no-jobs' };
   await activity('collect', `Opened the Ad Library: "${j.keyword}" — collecting ads`, { workspaceId: j.workspaceId, projectId: j.projectId });
   const maxAds = gentle ? Math.min(j.maxAds || s.maxAds, GENTLE.maxAds) : j.maxAds || s.maxAds;
-  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds, minAds: j.minAds || 1, url: j.url, projectId: j.projectId ? String(j.projectId) : null, pace: gentle ? GENTLE : null }, closeAdTab: s.closeAdTab };
+  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds, minAds: j.minAds || 1, url: j.url, projectId: j.projectId ? String(j.projectId) : null, pace: paceFor(pc) }, closeAdTab: s.closeAdTab };
 }));
 
 r.post('/manual-job', ah(async (req, res) => {
@@ -177,7 +195,9 @@ r.post('/manual-job', ah(async (req, res) => {
   const kw = new RegExp(`^\\s*${keyword.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
   await col('jobs').deleteMany({ workspaceId: ws, country, phase: 'queued', keyword: kw });
   await activity('collect', `Manual collect from the Ad Library: "${keyword}"`, { workspaceId: ws, projectId: doc.projectId });
-  return { job: { id: String(insertedId), keyword: doc.keyword, country: doc.country, maxAds: doc.maxAds, minAds: doc.minAds, url: doc.url, manual: true, projectId: String(doc.projectId) } };
+  // the same pace as a search from the Dashboard (without it the extension used its own slower one)
+  const pc = req.pcId ? await getPc(req.pcId) : null;
+  return { job: { id: String(insertedId), keyword: doc.keyword, country: doc.country, maxAds: doc.maxAds, minAds: doc.minAds, url: doc.url, manual: true, projectId: String(doc.projectId), pace: paceFor(pc) } };
 }));
 
 r.post('/ads', ah(async (req, res) => {
@@ -253,7 +273,7 @@ r.post('/job/:id/resume', ah(async (req, res) => {
   await activity('collect', `"${j.keyword}" — the Ad Library tab is back, collecting goes on`, { workspaceId: j.workspaceId, projectId: j.projectId });
   const pc = req.pcId ? await getPc(req.pcId) : null;
   const gentle = pc?.gentle === true;
-  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds: gentle ? Math.min(j.maxAds, GENTLE.maxAds) : j.maxAds, minAds: j.minAds || 1, url: j.url, manual: !!j.manual, projectId: j.projectId ? String(j.projectId) : null, pace: gentle ? GENTLE : null } };
+  return { job: { id: String(j._id), keyword: j.keyword, country: j.country, maxAds: gentle ? Math.min(j.maxAds, GENTLE.maxAds) : j.maxAds, minAds: j.minAds || 1, url: j.url, manual: !!j.manual, projectId: j.projectId ? String(j.projectId) : null, pace: paceFor(pc) } };
 }));
 
 r.post('/collect-done', ah(async (req) => {
