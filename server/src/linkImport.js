@@ -26,6 +26,17 @@ async function existingPages(pages) {
   const found = new Map();
   const direct = pages.map((p) => p.pageId);
   for (const p of await col('pages').find({ pageId: { $in: direct } }).project(proj).toArray()) found.set(p.pageId, p);
+  // a number that is not a known page id: many Pages' links carry their profile number, which is not the id the
+  // Ad Library gives them (facebook.com/100095…/ for page 1097…) — found by that number in their link
+  const numbers = pages.filter((p) => !p.username && !found.has(p.pageId)).map((p) => p.pageId);
+  for (let i = 0; i < numbers.length; i += 100) {
+    const chunk = numbers.slice(i, i + 100);
+    const re = new RegExp(`^https?://([a-z0-9-]+\\.)?facebook\\.com/(?:profile\\.php\\?id=)?(${chunk.join('|')})(?:/|&|$)`, 'i');
+    for (const p of await col('pages').find({ pageUrl: re, pageId: { $not: /^@/ } }).project(proj).toArray()) {
+      const n = String(p.pageUrl).match(re)?.[2];
+      if (n && !found.has(n)) found.set(n, p);
+    }
+  }
   const names = pages.filter((p) => p.username && !found.has(p.pageId)).map((p) => p.username);
   for (let i = 0; i < names.length; i += 100) {
     const chunk = names.slice(i, i + 100);

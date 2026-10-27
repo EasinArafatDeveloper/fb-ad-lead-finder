@@ -1411,5 +1411,22 @@ test('Paste links: Pages from links get their own project (source links), known 
   assert.equal(leadRow(await col('leads').findOne({ workspaceId: c.ws, pageId: '@newshop' }))[src], 'links');
 
   assert.throws(() => LI.checkLinks('https://www.facebook.com/groups/1'), /No Facebook Page link/);
+});
+
+test("Paste links: a Page's profile number (in its link, not its Ad Library id) finds the Page we already have — not a second copy", async () => {
+  await B.ensurePlans();
+  const LI = await import('../src/linkImport.js');
+  const c = await customer(20, { plan: 'starter' });
+  const now = new Date();
+  await col('pages').insertOne({ pageId: '777000333', pageName: 'Number Shop', pageUrl: 'https://www.facebook.com/100095000000333/', scrapeStatus: 'done', scrapedAt: now, phones: ['+8801811000000'], emails: [], retries: 0, createdAt: now });
+  const text = ['https://www.facebook.com/profile.php?id=100095000000333', 'https://www.facebook.com/p/Number-Shop-100095000000333/'].join('\n');
+  const pv = await LI.previewLinks(c.ws, text);
+  assert.equal(pv.valid, 1, 'both links are the same Page');
+  assert.equal(pv.alreadyRead, 1, 'found by the number in its link, read today');
+  const r = await LI.importLinks({ ws: c.ws, userId: c.user._id, text });
+  assert.equal(r.pages, 1);
+  assert.equal(await col('pages').countDocuments({ pageId: '100095000000333' }), 0, 'no second copy of the Page');
+  const lead = await col('leads').findOne({ workspaceId: c.ws, pageId: '777000333' });
+  assert.deepEqual(lead.phones, ['+8801811000000'], 'its data at once');
   assert.throws(() => LI.checkLinks(Array.from({ length: LI.LINKS_MAX + 1 }, (_, i) => `https://www.facebook.com/shop${i}`).join('\n')), /At most 500/);
 });
