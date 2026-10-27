@@ -10,7 +10,7 @@ import { AD_HEADERS, CONTACT_KINDS, LEAD_HEADERS, OVERRIDABLE, STATUSES, adRow, 
 import { pullSheet, syncSheet, testSheet } from './sheets.js';
 import { deleteLeads, ensureProject, oid, queuePages, stopPages } from './projects.js';
 import { workerInfo } from './worker-state.js';
-import { forgetOldProxies, isBadIp, proxyPool, proxyStatus } from './proxies.js';
+import { allProxies, forgetOldProxies, isBadIp, proxyGroups, proxyPool, proxyStatus } from './proxies.js';
 import { getPc, listPcs, pcName, pcNames, updatePc } from './pcs.js';
 import { accountOf, hasCredits, requirePerk } from './billing.js';
 import { listInbox, markRead, unreadCount } from './inbox.js';
@@ -449,7 +449,7 @@ const settingsDTO = async (req, s) => ({
   workspace: await getWsSettings(req.ws),
   worker: isAdmin(req) ? s : workerPublic(s),
   isAdmin: isAdmin(req),
-  ...(isAdmin(req) ? { proxyStatus: await proxyStatus(s) } : {}),
+  ...(isAdmin(req) ? { proxyStatus: await proxyStatus(s), proxyGroups: await proxyGroups(s) } : {}),
 });
 
 r.get('/settings', ah(async (req) => settingsDTO(req, await getSettings())));
@@ -518,9 +518,10 @@ r.put('/settings', ah(async (req) => {
     if (!isAdmin(req)) throw httpError(403, 'Only an admin can change the worker settings');
     const before = await getSettings();
     const s = await updateSettings(b.worker);
-    // a new proxy list: forget the IPs that are no longer in it (their counts would only confuse)
-    const pool = proxyPool(s);
-    if ('proxyList' in b.worker && pool.length) await forgetOldProxies(pool);
+    // a new proxy list: forget the IPs that are in neither list any more (their counts would only confuse) —
+    // a group that is only switched off keeps its counts
+    const all = allProxies(s);
+    if (('proxyList' in b.worker || 'resiList' in b.worker) && all.length) await forgetOldProxies(all);
     if ('running' in b.worker && before.running !== s.running) await activity(s.running ? 'resumed' : 'paused', s.running ? 'Resumed' : 'Paused');
   }
   if (b.workspace) await updateWsSettings(req.ws, b.workspace);

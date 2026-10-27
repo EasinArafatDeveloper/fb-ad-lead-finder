@@ -1,5 +1,5 @@
 import { col, httpError } from './db.js';
-import { parseProxyLine, proxyLines } from './proxies.js';
+import { parseProxyLine, proxyLines, proxyPool } from './proxies.js';
 
 // ---------------- worker settings (global — one Chrome worker, one IP; admin only) ----------------
 export const DEFAULTS = {
@@ -30,6 +30,12 @@ export const DEFAULTS = {
   proxyPass: '',
   // several IPs, one per line "host:port:user:pass" — taken in turn, one per page (see proxies.js)
   proxyList: '',
+  // two groups of proxies, each with its own on/off switch (proxies.js proxyPool):
+  //   static   = proxyList (the fixed IPs)          — on unless turned off
+  //   rotating = resiList (rotating residential, sticky lines "p.webshare.io:80:user-xx-1:pass", paid per GB)
+  proxyStaticOn: true,
+  resiList: '',
+  resiOn: false,
   // with a proxy list the server reads the pages itself (serverReader.js): this many at once, each through
   // its own IP, and one IP is used at most once every ipGapSec seconds
   serverReader: true,
@@ -43,7 +49,7 @@ export const MAX_ADS_LIMIT = 50000;
 export const clampMaxAds = (n, fallback = 200) => Math.min(MAX_ADS_LIMIT, Math.max(10, Math.round(Number(n) || fallback)));
 
 const NUMBER_KEYS = ['delayMin', 'delayMax', 'dailyLimit', 'maxAds', 'parallel', 'proxyPort', 'serverParallel', 'ipGapSec'];
-const BOOL_KEYS = ['running', 'insights', 'websiteFallback', 'closeAdTab', 'fullDetails', 'proxyEnabled', 'serverReader'];
+const BOOL_KEYS = ['running', 'insights', 'websiteFallback', 'closeAdTab', 'fullDetails', 'proxyEnabled', 'serverReader', 'proxyStaticOn', 'resiOn'];
 const STRING_KEYS = ['pausedReason', 'proxyHost', 'proxyUser', 'proxyPass'];
 
 export async function getSettings() {
@@ -58,12 +64,23 @@ export async function updateSettings(patch = {}) {
   for (const k of NUMBER_KEYS) if (k in patch) set[k] = Math.max(0, Number(patch[k]) || 0);
   for (const k of BOOL_KEYS) if (k in patch) set[k] = Boolean(patch[k]);
   for (const k of STRING_KEYS) if (k in patch) set[k] = String(patch[k] ?? '').trim().slice(0, 300);
-  if ('proxyList' in patch) {
-    const lines = proxyLines(patch.proxyList);
+  for (const [key, name] of [['proxyList', 'Static proxy list'], ['resiList', 'Rotating proxy list']]) {
+    if (!(key in patch)) continue;
+    const lines = proxyLines(patch[key]);
     const bad = lines.find((l) => !parseProxyLine(l));
-    if (bad) throw httpError(400, `Proxy list: "${bad.slice(0, 60)}" is not host:port:user:pass`);
-    if (lines.length > 500) throw httpError(400, 'Proxy list: at most 500 proxies');
-    set.proxyList = lines.join('\n');
+    if (bad) throw httpError(400, `${name}: "${bad.slice(0, 60)}" is not host:port:user:pass`);
+    if (lines.length > 500) throw httpError(400, `${name}: at most 500 proxies`);
+    set[key] = lines.join('\n');
+  }
+  // with the proxy on, at least one group must be on and have lines — otherwise pages would be read from the
+  // server's own IP (or by Chrome), which is never what turning a group off means
+  if (Object.keys(set).some((k) => ['proxyEnabled', 'proxyStaticOn', 'resiOn', 'proxyList', 'resiList'].includes(k))) {
+    const next = { ...(await getSettings()), ...set };
+    if (next.proxyEnabled) {
+      if (next.proxyStaticOn === false && !next.resiOn) throw httpError(400, 'Turn on at least one proxy group (Static or Rotating) — or turn the whole proxy off');
+      const hadLines = proxyLines(next.proxyList).length + proxyLines(next.resiList).length > 0;
+      if (hadLines && !proxyPool(next).length) throw httpError(400, 'The proxy group that is on has no proxies — paste its list or turn the other group on');
+    }
   }
   if ('running' in set && set.running) {
     // Resume = start now (also ends a login-wall wait)

@@ -18,12 +18,30 @@ export const proxyLines = (text) =>
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith('#'));
 
-/** The proxies to use: the list if there is one, else the single Host/Port/Username/Password. */
-export function proxyPool(s) {
-  if (!s.proxyEnabled) return [];
+// Two groups, each switched on/off in Settings → Proxy: the fixed "static" IPs and the "rotating" residential
+// lines (paid per GB). Both are used the same way; the group only says where an IP comes from.
+export const GROUPS = { static: 'Static IPs', rotating: 'Rotating residential' };
+
+/** Every proxy of one group, whether the group is on or not. */
+function groupLines(s, group) {
+  if (group === 'rotating') return proxyLines(s.resiList).map(parseProxyLine).filter(Boolean).slice(0, 500);
   const list = proxyLines(s.proxyList).map(parseProxyLine).filter(Boolean);
   if (!list.length && s.proxyHost) list.push({ host: s.proxyHost, port: Number(s.proxyPort) || 44445, user: s.proxyUser || '', pass: s.proxyPass || '' });
-  return list.slice(0, 500).map((p) => ({ ...p, id: `${p.host}:${p.port}:${p.user}` }));
+  return list.slice(0, 500);
+}
+const withIds = (list, group) => list.map((p) => ({ ...p, group, id: `${p.host}:${p.port}:${p.user}` }));
+const uniqueIds = (list) => [...new Map(list.map((p) => [p.id, p])).values()];
+
+/** Every proxy in both lists, on or off — their counts are kept while a group is switched off. */
+export const allProxies = (s) => uniqueIds([...withIds(groupLines(s, 'static'), 'static'), ...withIds(groupLines(s, 'rotating'), 'rotating')]);
+
+/** The proxies to use now: the groups that are on (static: the list, else the single Host/Port/Username/Password). */
+export function proxyPool(s) {
+  if (!s.proxyEnabled) return [];
+  const out = [];
+  if (s.proxyStaticOn !== false) out.push(...withIds(groupLines(s, 'static'), 'static'));
+  if (s.resiOn) out.push(...withIds(groupLines(s, 'rotating'), 'rotating'));
+  return uniqueIds(out);
 }
 
 const forWorker = (p) => (p ? { enabled: true, id: p.id, host: p.host, port: p.port, user: p.user, pass: p.pass } : { enabled: false });
@@ -142,10 +160,13 @@ export async function proxyWorked(id) {
   );
 }
 
-/** Forget the IPs that are no longer in the list (called when the proxy list is saved). */
-export const forgetOldProxies = (pool) => col('proxystate').deleteMany({ _id: { $nin: pool.map((p) => p.id) } });
+/**
+ * Forget the IPs that are in neither list any more (called when a list is saved). Pass allProxies(s) — never
+ * just the groups that are on, or switching a group off would wipe its counts.
+ */
+export const forgetOldProxies = (all) => col('proxystate').deleteMany({ _id: { $nin: all.map((p) => p.id) } });
 
-/** For the Settings page (admin): every IP and how it's doing. Passwords are not included. */
+/** For the Settings page (admin): every IP in use and how it's doing. Passwords are not included. */
 export async function proxyStatus(s) {
   const pool = proxyPool(s);
   const st = await states(pool);
@@ -153,12 +174,45 @@ export async function proxyStatus(s) {
     const x = st.get(p.id) || {};
     return {
       label: `${p.host}:${p.port} · ${p.user}`,
+      group: p.group,
       pages: x.pages || 0,
       walls: x.walls || 0,
       wallRate: Math.round(wallRate(x) * 100),
       bad: isBadIp(x),
       restingUntil: resting(x) ? x.wallUntil : null,
       lastUsedAt: x.lastUsedAt || null,
+    };
+  });
+}
+
+/**
+ * Static vs Rotating side by side (Settings → Proxy): per group its switch, how many lines, and what its IPs did —
+ * pages read, login walls, connection errors. "recentWallRate" = the average of each IP's recent wall rate
+ * (moves with the last tries), "wallRate" = all time.
+ */
+export async function proxyGroups(s) {
+  const all = allProxies(s);
+  const st = await states(all);
+  const now = new Date();
+  return Object.entries(GROUPS).map(([group, label]) => {
+    const list = all.filter((p) => p.group === group);
+    const rows = list.map((p) => st.get(p.id) || {});
+    const pages = rows.reduce((a, x) => a + (x.pages || 0), 0);
+    const walls = rows.reduce((a, x) => a + (x.walls || 0), 0);
+    const tried = rows.filter((x) => tries(x) > 0);
+    return {
+      group,
+      label,
+      on: Boolean(s.proxyEnabled) && (group === 'rotating' ? Boolean(s.resiOn) : s.proxyStaticOn !== false),
+      lines: list.length,
+      pages,
+      walls,
+      netErrors: rows.reduce((a, x) => a + (x.netErrors || 0), 0),
+      wallRate: pages + walls ? Math.round((walls / (pages + walls)) * 1000) / 10 : null,
+      recentWallRate: tried.length ? Math.round((tried.reduce((a, x) => a + wallRate(x), 0) / tried.length) * 1000) / 10 : null,
+      bad: rows.filter(isBadIp).length,
+      resting: rows.filter((x) => x.wallUntil && new Date(x.wallUntil) > now).length,
+      lastUsedAt: rows.reduce((m, x) => (x.lastUsedAt && (!m || new Date(x.lastUsedAt) > m) ? new Date(x.lastUsedAt) : m), null),
     };
   });
 }

@@ -1060,6 +1060,42 @@ test("A customer's extension sees only its own account's numbers — never the s
   }
 });
 
+test('Proxy groups: Static off → the server reads through the Rotating lines only; counts survive the switch; both off is refused', async () => {
+  const { updateSettings } = await import('../src/settings.js');
+  const PX = await import('../src/proxies.js');
+  await settings({ ips: 3 });
+  await updateSettings({ resiList: 'res.test:80:u-gb-1:p\nres.test:80:u-ca-2:p', resiOn: true });
+  let s = await getSettings();
+  assert.equal(proxyPool(s).length, 5, 'both groups on: 3 static + 2 rotating');
+  await col('proxystate').updateOne({ _id: 'ip1.test:80:u1' }, { $set: { pages: 10, walls: 1 } }, { upsert: true });
+
+  await updateSettings({ proxyStaticOn: false });
+  s = await getSettings();
+  assert.deepEqual(proxyPool(s).map((p) => p.group), ['rotating', 'rotating'], 'static off');
+  assert.ok(W.serverReads(s), 'the server still reads (through the rotating lines)');
+  await PX.forgetOldProxies(PX.allProxies(s)); // what saving a list does
+  assert.ok(await col('proxystate').findOne({ _id: 'ip1.test:80:u1' }), "a switched-off group keeps its counts");
+  const groups = await PX.proxyGroups(s);
+  const st = groups.find((g) => g.group === 'static');
+  assert.equal(st.on, false);
+  assert.equal(st.lines, 3);
+  assert.equal(st.pages, 10);
+  assert.equal(groups.find((g) => g.group === 'rotating').on, true);
+
+  // the server reader really reads through the rotating lines
+  await addPages(2);
+  reads = [];
+  script = {};
+  await run();
+  assert.ok(reads.length >= 2 && reads.every((r) => r.ip.startsWith('res.test')), `only rotating lines used: ${reads.map((r) => r.ip)}`);
+
+  await assert.rejects(updateSettings({ resiOn: false }), /at least one proxy group/, 'both off is refused');
+  await updateSettings({ proxyStaticOn: true, resiOn: false });
+  s = await getSettings();
+  assert.deepEqual(proxyPool(s).map((p) => p.group), ['static', 'static', 'static'], 'back to the static IPs only');
+  await assert.rejects(updateSettings({ proxyStaticOn: false, resiOn: true, resiList: '' }), /has no proxies/, 'an empty group alone is refused');
+});
+
 test("A customer's extension can only report on the page its own Chrome is reading — it can't pause the service, start a cooldown or change other pages", async () => {
   await B.ensurePlans();
   await settings(); // a proxy list → pages are read on the server; Chrome gets only the ones that need it

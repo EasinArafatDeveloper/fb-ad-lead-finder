@@ -136,7 +136,7 @@ function IpHealth({ status }) {
           </p>
           <Button
             size="sm"
-            onClick={() => navigator.clipboard.writeText(bad.map((p) => p.label.split(' · ')[0].split(':')[0]).join('\n')).then(() => toast.success(`${bad.length} bad IPs copied`))}
+            onClick={() => navigator.clipboard.writeText(bad.map((p) => (p.group === 'rotating' ? p.label.split(' · ')[1] : p.label.split(' · ')[0].split(':')[0])).join('\n')).then(() => toast.success(`${bad.length} bad IPs copied`))}
           >
             <Copy className="h-3.5 w-3.5" /> Copy bad IPs
           </Button>
@@ -157,7 +157,16 @@ function IpHealth({ status }) {
           <tbody>
             {[...rows].sort((a, b) => order(a) - order(b) || b.pages - a.pages).map((p) => (
               <tr key={p.label} className="border-t border-slate-100 dark:border-white/5">
-                <td className="px-3 py-1.5 font-mono">{p.label.split(' · ')[0]}</td>
+                <td className="px-3 py-1.5 font-mono">
+                  {p.group === 'rotating' ? (
+                    <>
+                      <span className="mr-1.5 rounded bg-sky-100 px-1 py-0.5 font-sans text-[10px] font-bold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300" title="Rotating residential">ROT</span>
+                      {p.label.split(' · ')[1]}
+                    </>
+                  ) : (
+                    p.label.split(' · ')[0]
+                  )}
+                </td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{p.pages}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{p.walls}</td>
                 <td className={cn('px-3 py-1.5 text-right tabular-nums', p.wallRate >= 50 && 'font-semibold text-rose-600')}>{p.wallRate}%</td>
@@ -185,6 +194,86 @@ function IpHealth({ status }) {
   );
 }
 
+// ---------------- the two proxy groups: Static and Rotating ----------------
+function ProxyGroup({ id, title, hint, on, onToggle, value, onChange, count, placeholder, testing, onTest, note }) {
+  return (
+    <div className={cn('rounded-xl border p-4 transition', on ? 'border-indigo-200 bg-indigo-50/30 dark:border-indigo-500/30 dark:bg-indigo-500/5' : 'border-slate-200 dark:border-white/10')}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-semibold">{title}</h3>
+            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-bold tabular-nums text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200">{count} lines</span>
+            <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-bold', on ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' : 'bg-slate-100 text-slate-500 dark:bg-white/10')}>
+              {on ? 'IN USE' : 'OFF'}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-slate-500">{hint}</p>
+        </div>
+        <Toggle id={`${id}-on`} checked={on} onChange={onToggle} label={on ? 'On' : 'Off'} />
+      </div>
+      {note && <p className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 dark:bg-sky-500/10 dark:text-sky-100">{note}</p>}
+      <label htmlFor={id} className="label mb-1.5 mt-3">One per line: host:port:user:pass</label>
+      <textarea id={id} rows={5} spellCheck={false} className="input font-mono text-xs leading-relaxed" placeholder={placeholder} value={value} onChange={onChange} />
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button size="sm" loading={testing} onClick={onTest}><PlugZap className="h-3.5 w-3.5" /> Test the first line</Button>
+        <p className="text-xs text-slate-500">A login wall rests only the line that got it — the others keep reading.</p>
+      </div>
+    </div>
+  );
+}
+
+function GroupCompare({ groups }) {
+  const pct = (v) => (v == null ? '–' : `${v}%`);
+  const used = groups.filter((g) => g.pages + g.walls > 0);
+  // the group with the lower recent wall % (only once both have been tried a bit)
+  const best = used.length === 2 && used.every((g) => g.pages + g.walls >= 50) ? [...used].sort((a, b) => a.recentWallRate - b.recentWallRate)[0] : null;
+  const rows = [
+    ['Switch', (g) => (g.on ? 'In use' : 'Off')],
+    ['Lines', (g) => g.lines],
+    ['Pages read', (g) => g.pages.toLocaleString()],
+    ['Login walls', (g) => g.walls.toLocaleString()],
+    ['Wall % (recent)', (g) => pct(g.recentWallRate), 'Each line\'s latest tries count most — this shows how it goes now'],
+    ['Wall % (all time)', (g) => pct(g.wallRate)],
+    ['Connection errors', (g) => g.netErrors.toLocaleString(), 'The page did not load (the line dropped) — the page goes back to the queue, nothing lost'],
+    ['Bad lines now', (g) => g.bad],
+    ['Resting now', (g) => g.resting],
+    ['Last used', (g) => (g.lastUsedAt ? `${new Date(g.lastUsedAt).toLocaleDateString()} ${hhmm(g.lastUsedAt)}` : '–')],
+  ];
+  return (
+    <div>
+      <div className="overflow-x-auto rounded-xl border border-slate-200 text-sm dark:border-white/10">
+        <table className="w-full">
+          <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:bg-slate-800">
+            <tr>
+              <th className="px-3 py-2 font-semibold" />
+              {groups.map((g) => (
+                <th key={g.group} className="px-3 py-2 text-right font-semibold">{g.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([name, value, title]) => (
+              <tr key={name} className="border-t border-slate-100 dark:border-white/5">
+                <td className="px-3 py-1.5 text-slate-500" title={title}>{name}</td>
+                {groups.map((g) => (
+                  <td key={g.group} className={cn('px-3 py-1.5 text-right tabular-nums', name === 'Wall % (recent)' && best?.group === g.group && 'font-bold text-emerald-600')}>
+                    {value(g)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-xs text-slate-500">
+        {best
+          ? <><b>{best.label}</b> gets fewer login walls right now. Lower wall % = Facebook blocks it less. Data used by the rotating plan: see the Webshare dashboard.</>
+          : 'Let both groups read at least ~50 pages each, then compare the wall %. Lower = Facebook blocks it less. Data used by the rotating plan: see the Webshare dashboard.'}
+      </p>
+    </div>
+  );
+}
+
 // ---------------- the page ----------------
 const TABS = [
   { id: 'proxy', label: 'Proxy & reading', icon: ShieldCheck, text: 'IPs that read the Facebook pages', admin: true },
@@ -200,6 +289,7 @@ export default function Settings() {
   const [worker, setWorker] = useState(null); // the shared worker (admins)
   const [admin, setAdmin] = useState(false);
   const [proxyStatus, setProxyStatus] = useState([]);
+  const [proxyGroups, setProxyGroups] = useState([]);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState('');
   const [saved, setSaved] = useState(''); // the last saved copy, to know if something changed
@@ -219,6 +309,7 @@ export default function Settings() {
       websiteFallback: k.websiteFallback, closeAdTab: k.closeAdTab, insights: k.insights !== false,
       proxyEnabled: Boolean(k.proxyEnabled), proxyHost: k.proxyHost || '', proxyPort: Number(k.proxyPort) || 44445,
       proxyUser: k.proxyUser || '', proxyPass: k.proxyPass || '', proxyList: k.proxyList || '',
+      proxyStaticOn: k.proxyStaticOn !== false, resiOn: Boolean(k.resiOn), resiList: k.resiList || '',
       serverReader: k.serverReader !== false, serverParallel: Number(k.serverParallel) || 5, ipGapSec: Number(k.ipGapSec) || 0,
     } } : {}),
   });
@@ -227,6 +318,7 @@ export default function Settings() {
     setWorker(r.worker);
     setAdmin(!!r.isAdmin);
     setProxyStatus(r.proxyStatus || []);
+    setProxyGroups(r.proxyGroups || []);
     setSaved(JSON.stringify({ w: r.workspace, k: r.worker }));
   };
   useEffect(() => {
@@ -250,13 +342,15 @@ export default function Settings() {
   const field = (setter) => (k) => (v) => setter((x) => ({ ...x, [k]: v?.target ? (v.target.type === 'number' ? Number(v.target.value) : v.target.value) : v }));
   const setW = field(setWs);
   const setK = field(setWorker);
-  const proxyLines = (worker?.proxyList || '').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
+  const linesOf = (text) => (text || '').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
+  const proxyLines = linesOf(worker?.proxyList);
+  const resiLines = linesOf(worker?.resiList);
 
-  const testProxy = async () => {
-    setBusy('test-proxy');
+  const testProxy = async (lines = proxyLines, which = 'test-proxy') => {
+    setBusy(which);
     try {
       // with a list: test its first proxy
-      const first = proxyLines[0]?.trim();
+      const first = lines[0]?.trim();
       const [host, port, user, ...pass] = first ? first.split(':') : [];
       const res = await api('/admin/test-proxy', {
         method: 'POST',
@@ -358,24 +452,51 @@ export default function Settings() {
                     The proxy is <b>off</b> — pages are read from the server's own IP, which Facebook blocks quickly. Turn it on (switch on the right).
                   </p>
                 )}
-                <div className="flex items-end justify-between gap-2">
-                  <label htmlFor="pl" className="label mb-1.5">Proxy list — one per line: host:port:user:pass</label>
-                  <span className="mb-1.5 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-bold tabular-nums text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-200">{proxyLines.length} IPs</span>
-                </div>
-                <textarea
-                  id="pl"
-                  rows={7}
-                  spellCheck={false}
-                  className="input font-mono text-xs leading-relaxed"
-                  placeholder={'p.webshare.io:80:user-1:password\np.webshare.io:80:user-2:password'}
-                  value={k.proxyList || ''}
-                  onChange={setK('proxyList')}
-                />
-                <div className="mt-3 flex flex-wrap items-center gap-3">
-                  <Button size="sm" loading={busy === 'test-proxy'} onClick={testProxy}><PlugZap className="h-3.5 w-3.5" /> Test the first IP</Button>
-                  <p className="text-xs text-slate-500">A login wall rests only the IP that got it — the others keep reading.</p>
+                <p className="mb-4 text-xs text-slate-500">
+                  Two groups, each with its own switch. Pages are read through the groups that are <b>on</b> — turn one off and the other does all the work.
+                  A group that is off keeps its counts, so you can switch back any time. Changes apply after Save.
+                </p>
+                <div className="space-y-4">
+                  <ProxyGroup
+                    id="pl"
+                    title="Static IPs"
+                    hint="Webshare Static Residential — fixed IPs, a lot of data included"
+                    on={k.proxyStaticOn !== false}
+                    onToggle={setK('proxyStaticOn')}
+                    value={k.proxyList || ''}
+                    onChange={setK('proxyList')}
+                    count={proxyLines.length}
+                    placeholder={'1.2.3.4:5678:user:password\n5.6.7.8:9012:user:password'}
+                    testing={busy === 'test-proxy'}
+                    onTest={() => testProxy(proxyLines, 'test-proxy')}
+                  />
+                  <ProxyGroup
+                    id="rl"
+                    title="Rotating residential"
+                    hint="Webshare Rotating Residential — home IPs from many countries, paid per GB (every line shares the same data)"
+                    on={Boolean(k.resiOn)}
+                    onToggle={setK('resiOn')}
+                    value={k.resiList || ''}
+                    onChange={setK('resiList')}
+                    count={resiLines.length}
+                    placeholder={'p.webshare.io:80:username-gb-1:password\np.webshare.io:80:username-ca-2:password'}
+                    testing={busy === 'test-resi'}
+                    onTest={() => (resiLines.length ? testProxy(resiLines, 'test-resi') : toast.error('Paste the rotating list first'))}
+                    note={
+                      <>
+                        Paste <b>sticky</b> lines (Webshare → Rotating Residential → Proxy List → Download), not the single <code>-rotate</code> line: each line
+                        then works like its own IP. 5–20 lines are enough for a test.
+                      </>
+                    }
+                  />
                 </div>
               </Card>
+
+              {proxyGroups.some((g) => g.lines > 0) && (
+                <Card icon={Gauge} title="Static vs Rotating" text="What each group's IPs did — compare the wall % to see which one Facebook blocks less">
+                  <GroupCompare groups={proxyGroups} />
+                </Card>
+              )}
 
               {proxyStatus.length > 1 && (
                 <Card icon={ShieldCheck} title="How the IPs are doing" text="Click a box to list only those IPs">

@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classify, parsePageHtml } from '../src/pageReader.js';
-import { parseProxyLine, proxyPool } from '../src/proxies.js';
+import { allProxies, parseProxyLine, proxyPool } from '../src/proxies.js';
 
 const item = (typename, text, extra = {}) => ({ timeline_context_item: { renderer: { __typename: typename, context_item: { title: { text } }, ...extra } } });
 const pageHtml = (items, { bio = '', followers = '' } = {}) => `<!doctype html><html><head>
@@ -88,4 +88,15 @@ test('proxy list lines', () => {
   const pool = proxyPool({ proxyEnabled: true, proxyList: 'a.com:80:u1:p\n# comment\n\nb.com:81:u2:p' });
   assert.deepEqual(pool.map((p) => p.id), ['a.com:80:u1', 'b.com:81:u2']);
   assert.equal(proxyPool({ proxyEnabled: false, proxyList: 'a.com:80:u:p' }).length, 0, 'proxy off = no pool');
+});
+
+test('proxy groups: Static and Rotating, each switched on/off', () => {
+  const s = { proxyEnabled: true, proxyList: 'a.com:80:u1:p\nb.com:81:u2:p', resiList: 'p.webshare.io:80:u-gb-1:p\np.webshare.io:80:u-ca-2:p' };
+  assert.deepEqual(proxyPool(s).map((p) => p.group), ['static', 'static'], 'old settings (no switches): static only, as before');
+  const both = proxyPool({ ...s, resiOn: true });
+  assert.deepEqual(both.map((p) => p.id), ['a.com:80:u1', 'b.com:81:u2', 'p.webshare.io:80:u-gb-1', 'p.webshare.io:80:u-ca-2']);
+  const rotOnly = proxyPool({ ...s, resiOn: true, proxyStaticOn: false });
+  assert.deepEqual(rotOnly.map((p) => p.group), ['rotating', 'rotating'], 'static off → only the rotating lines');
+  assert.equal(proxyPool({ ...s, resiOn: true, proxyEnabled: false }).length, 0, 'the main switch still turns everything off');
+  assert.equal(allProxies({ ...s, proxyStaticOn: false, proxyEnabled: false }).length, 4, 'allProxies: both lists, switches ignored');
 });
