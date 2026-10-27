@@ -1503,3 +1503,67 @@ test('Collect by scrolling is per computer: only the computer switched on gets c
     await col('pcs').deleteMany({});
   }
 });
+
+test('Admin Live: every active account with its collecting search (ads, computer, mode), waiting searches, reading and problems; one account\'s projects and leads, read-only', async () => {
+  await B.ensurePlans();
+  await col('pcs').deleteMany({});
+  const L = await import('../src/adminLive.js');
+  const { default: adminRoutes } = await import('../src/admin.js');
+  const c = await customer(30, { plan: 'starter' });
+  const now = new Date();
+  await col('pcs').insertOne({ _id: 'live-pc-0000000000000001', workspaceId: c.ws, name: 'Remote PC', version: '3.6.2', ip: '1.2.3.4', ua: 'Chrome/156', lastSeen: now, scrollCollect: true });
+  const pid = new ObjectId();
+  await col('projects').insertOne({ _id: pid, workspaceId: c.ws, key: `live|${Date.now()}`, name: 'ladies bag', keyword: 'ladies bag', country: 'BD', createdAt: now });
+  const { insertedId: jobId } = await col('jobs').insertOne({ workspaceId: c.ws, keyword: 'ladies bag', country: 'BD', phase: 'collecting', adsSeen: 47, maxAds: 1000, pageIds: ['lp1', 'lp2'], projectId: pid, collector: 'live-pc-0000000000000001', startedAt: new Date(now - 120e3), lastActivity: new Date(now - 90e3), createdAt: now });
+  await col('jobs').insertOne({ workspaceId: c.ws, keyword: 'perfume', country: 'BD', phase: 'queued', createdAt: now });
+  await col('leads').insertMany([
+    { workspaceId: c.ws, pageId: 'lp1', pageName: 'Bag Shop', phones: ['+8801711000000'], scrapeStatus: 'done', scrapedAt: now, jobIds: [String(jobId)], projectIds: [pid], createdAt: now, updatedAt: now },
+    { workspaceId: c.ws, pageId: 'lp2', pageName: 'Other Bags', scrapeStatus: 'pending', jobIds: [String(jobId)], projectIds: [pid], createdAt: now, updatedAt: now },
+  ]);
+  await col('activity').insertOne({ ts: now, type: 'failed', msg: 'Some page — could not be read', workspaceId: c.ws });
+
+  const d = await L.liveActivity();
+  const a = d.accounts.find((x) => x.workspaceId === String(c.ws));
+  assert.ok(a, 'the active account is listed');
+  assert.equal(a.collecting.length, 1);
+  const j = a.collecting[0];
+  assert.equal(j.keyword, 'ladies bag');
+  assert.equal(j.ads, 47);
+  assert.equal(j.pages, 2);
+  assert.equal(j.read, 1);
+  assert.equal(j.withContact, 1);
+  assert.equal(j.pc.name, 'Remote PC');
+  assert.equal(j.pc.mode, 'scroll', 'shows how that computer collects');
+  assert.deepEqual(a.queued.map((q) => q.keyword), ['perfume']);
+  assert.equal(a.reading.pending, 1);
+  assert.equal(a.reading.last5min, 1);
+  assert.ok(a.issues.some((i) => /could not be read/.test(i.msg)), 'recent problem');
+  assert.ok(a.issues.some((i) => i.type === 'silent'), 'the tab silent for 90 s is flagged');
+  assert.equal(d.accounts[0].workspaceId, String(c.ws), 'the account collecting now comes first');
+
+  // the account page (admin only)
+  const app = (role) => express().use(express.json()).use((req, _res, next) => ((req.user = { email: 'x@x.com', role }), next())).use('/api/admin', (req, res, next) => (role === 'admin' ? next() : res.status(403).json({ error: 'admin only' })), adminRoutes);
+  const srv = app('admin').listen(0);
+  const base = `http://127.0.0.1:${srv.address().port}/api/admin`;
+  try {
+    const acc = await (await fetch(`${base}/accounts/${c.ws}`)).json();
+    assert.equal(acc.totals.leads, 2);
+    assert.equal(acc.projects[0].name, 'ladies bag');
+    const all = await (await fetch(`${base}/accounts/${c.ws}/leads?projectId=${pid}`)).json();
+    assert.equal(all.total, 2);
+    const phone = await (await fetch(`${base}/accounts/${c.ws}/leads?need=phone`)).json();
+    assert.deepEqual(phone.items.map((l) => l.pageName), ['Bag Shop'], 'filters work');
+    const csv = await (await fetch(`${base}/accounts/${c.ws}/export.csv?projectId=${pid}`)).text();
+    assert.ok(csv.includes('Bag Shop') && csv.includes('Other Bags'), 'CSV of the project');
+    assert.equal((await fetch(`${base}/accounts/000000000000000000000000`)).status, 404);
+  } finally {
+    srv.close();
+  }
+  const member = app('member').listen(0);
+  try {
+    assert.equal((await fetch(`http://127.0.0.1:${member.address().port}/api/admin/live`)).status, 403, 'members never see it');
+  } finally {
+    member.close();
+    await col('pcs').deleteMany({});
+  }
+});

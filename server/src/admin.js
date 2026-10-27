@@ -11,8 +11,11 @@ import { providerList } from './payments.js';
 import { deleteWorkspaceData, oid } from './projects.js';
 import { startOfToday } from './util.js';
 import { OUTDATED_LIST_DAYS, isOutdated, outdatedExtensions, worker as workerState } from './worker-state.js';
+import liveRoutes from './adminLive.js';
 
 const r = express.Router();
+// Live: what every account is doing now, and one account's projects / leads (read-only) — adminLive.js
+r.use(liveRoutes);
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).then((out) => out !== undefined && !res.headersSent && res.json(out)).catch(next);
 
 async function userRow(u) {

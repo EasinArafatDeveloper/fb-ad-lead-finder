@@ -5,6 +5,7 @@ import { ArrowRight, BellRing, CheckCircle2, Coins, DollarSign, FileSearch, Gaug
 import { api } from '../../lib/api';
 import { cn, formatNumber } from '../../lib/utils';
 import { Button, KpiCard, PageHeader, Skeleton } from '../../components/ui';
+import LiveActivity from '../../components/LiveActivity';
 
 /** 14 days as small bars — sign-ups, pages read, money. */
 function Bars({ data, field, color, label, money }) {
@@ -153,6 +154,8 @@ export default function AdminOverview() {
   return (
     <div className="space-y-8">
       <PageHeader icon={Gauge} title="Admin" subtitle="Customers, money and usage — the whole service at a glance" />
+
+      <LiveActivity />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Customers" value={d.users} icon={Users} tone="indigo" sub={`${d.signups7} new this week · ${d.active7} searched this week`} />
