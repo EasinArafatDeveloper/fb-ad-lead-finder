@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { CheckCircle2, Chrome, Copy, Download, Loader2, PlugZap } from 'lucide-react';
 import { api, extensionHere } from '../lib/api';
 import { Button, PageHeader } from '../components/ui';
+import { useStats } from '../components/Layout';
 
 const browserName = () => (navigator.brave ? 'Brave' : /Edg\//.test(navigator.userAgent) ? 'Edge' : 'Chrome');
 const extPage = (b) => ({ Brave: 'brave://extensions', Edge: 'edge://extensions' })[b] || 'chrome://extensions';
@@ -44,12 +45,20 @@ function InstallSteps({ ext }) {
  * the page makes a key and hands it to the extension (extension/content/dashboard.js → background).
  */
 export default function ConnectExtension() {
+  const { refresh } = useStats();
   const [state, setState] = useState('idle'); // idle | connecting | connected | no-extension
   const [manualKey, setManualKey] = useState('');
   const [ext, setExt] = useState(null); // { version, url, storeUrl }
+  const stateRef = useRef('idle');
+  const timerRef = useRef(null);
+  const setStepState = (next) => {
+    stateRef.current = next;
+    setState(next);
+  };
   const here = extensionHere();
   useEffect(() => {
     api('/public/extension').then(setExt).catch(() => {});
+    return () => clearTimeout(timerRef.current);
   }, []);
   const outdated = here && ext?.version && here !== ext.version;
 
@@ -57,33 +66,42 @@ export default function ConnectExtension() {
     const onMsg = (e) => {
       if (e.source !== window || !e.data || e.data.__fblf !== true) return;
       if (e.data.type === 'connected') {
-        setState('connected');
+        clearTimeout(timerRef.current);
+        setStepState('connected');
+        refresh?.();
         toast.success('The extension is connected to your account');
       }
       if (e.data.type === 'connect-failed') {
-        setState('idle');
+        clearTimeout(timerRef.current);
+        setStepState('idle');
         toast.error(e.data.error || 'The extension could not save the key');
       }
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, []);
+  }, [refresh]);
 
   const connect = async () => {
-    setState('connecting');
+    clearTimeout(timerRef.current);
+    setStepState('connecting');
     try {
       const { key } = await api('/extension/keys', { method: 'POST', body: {} });
       if (!extensionHere()) {
         setManualKey(key);
-        setState('no-extension');
+        setStepState('no-extension');
         return;
       }
       window.postMessage({ __fblf: true, type: 'connect', key, server: window.location.origin }, window.location.origin);
       // no answer in 5 s → an older extension that doesn't know "connect": show the key to paste
-      setTimeout(() => setState((s) => (s === 'connecting' ? (setManualKey(key), 'no-extension') : s)), 5000);
+      timerRef.current = setTimeout(() => {
+        if (stateRef.current === 'connecting') {
+          setManualKey(key);
+          setStepState('no-extension');
+        }
+      }, 5000);
     } catch (e) {
       toast.error(e.message);
-      setState('idle');
+      setStepState('idle');
     }
   };
 
@@ -118,13 +136,19 @@ export default function ConnectExtension() {
             <div className="flex-1">
               <p className="font-semibold">Connect it to your account</p>
               {state === 'connected' ? (
-                <p className="mt-2 inline-flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200">
-                  <CheckCircle2 className="h-5 w-5" /> Connected — searches you start now open in this Chrome.
-                </p>
+                <div key="connected-box">
+                  <p className="mt-2 inline-flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200">
+                    <CheckCircle2 className="h-5 w-5 shrink-0" />
+                    <span>Connected — searches you start now open in this Chrome.</span>
+                  </p>
+                </div>
               ) : (
-                <Button variant="primary" className="mt-2" onClick={connect} disabled={state === 'connecting'}>
-                  {state === 'connecting' ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />} Connect this computer
-                </Button>
+                <div key="connect-btn-box">
+                  <Button variant="primary" className="mt-2" onClick={connect} loading={state === 'connecting'} disabled={state === 'connecting'}>
+                    {state !== 'connecting' && <PlugZap className="h-4 w-4 shrink-0" />}
+                    <span>Connect this computer</span>
+                  </Button>
+                </div>
               )}
               {state === 'no-extension' && manualKey && (
                 <div className="mt-4 rounded-xl border border-slate-200 p-4 text-sm dark:border-white/10">

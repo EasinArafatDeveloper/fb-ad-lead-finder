@@ -1,4 +1,4 @@
-import { StrictMode, Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { Component, StrictMode, Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Toaster } from 'sonner';
@@ -117,11 +117,27 @@ function App() {
   );
 }
 
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { retries: 0 };
+  }
+  componentDidCatch() {
+    if (this.state.retries < 2) this.setState((s) => ({ retries: s.retries + 1 }));
+    else window.location.reload();
+  }
+  render() {
+    return <div key={this.state.retries}>{this.props.children}</div>;
+  }
+}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <BrowserRouter>
-      <App />
-      <Toaster position="bottom-right" richColors closeButton />
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <App />
+        <Toaster position="bottom-right" richColors closeButton />
+      </BrowserRouter>
+    </ErrorBoundary>
   </StrictMode>,
 );

@@ -393,7 +393,10 @@ r.get('/extension/keys', ah(async (req) =>
   (await col('extokens').find({ userId: req.user._id }).sort({ createdAt: -1 }).toArray()).map((t) => ({ id: t._id.slice(0, 16), label: t.label, hint: t.hint, createdAt: t.createdAt, lastUsed: t.lastUsed })),
 ));
 r.post('/extension/keys', ah(async (req) => {
-  if ((await col('extokens').countDocuments({ userId: req.user._id })) >= 10) throw httpError(400, 'At most 10 connected extensions — remove an old one first');
+  const existing = await col('extokens').find({ userId: req.user._id }).sort({ lastUsed: -1, createdAt: -1 }).project({ _id: 1 }).toArray();
+  if (existing.length >= 10) {
+    await col('extokens').deleteMany({ _id: { $in: existing.slice(9).map((t) => t._id) } });
+  }
   return { key: await createExtensionKey(req.user, req.body?.label || String(req.get('user-agent') || '').match(/(Chrome|Edg|Firefox)\/[\d]+/)?.[0] || 'Chrome') };
 }));
 r.delete('/extension/keys/:id', ah(async (req) => {
