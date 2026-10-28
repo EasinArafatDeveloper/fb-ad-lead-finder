@@ -120,7 +120,7 @@ function message(items, appUrl) {
   const total = items.reduce((a, x) => a + x.withContact, 0);
   // plain subject (no emoji) — new senders with emoji subjects land in spam more often
   const subject = one ? `Search ready: ${one.keyword} (${fmt(one.withContact)} leads with contact)` : `${items.length} searches ready (${fmt(total)} leads with contact)`;
-  const url = (x) => `${appUrl}${x.projectId ? `/projects/${x.projectId}` : '/searches'}`;
+  const url = (x) => `${appUrl}${x.projectId ? `/projects/${x.projectId}` : '/search'}`;
   const rows = items
     .map(
       (x) => `
@@ -149,7 +149,7 @@ function message(items, appUrl) {
   const push = {
     title: one ? `✅ "${one.keyword}" is ready` : `✅ ${items.length} searches are ready`,
     body: one ? `${fmt(one.withContact)} leads with contact from ${fmt(one.pages)} pages` : `${fmt(total)} leads with contact — ${items.map((x) => x.keyword).join(', ')}`.slice(0, 180),
-    url: one ? url(one) : `${appUrl}/searches`,
+    url: one ? url(one) : `${appUrl}/search`,
     tag: one ? `search-${one.id}` : 'searches',
   };
   return { subject, html, text, push };

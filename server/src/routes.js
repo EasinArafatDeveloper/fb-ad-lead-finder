@@ -735,13 +735,15 @@ r.get('/export.xlsx', ah(async (req, res) => {
   };
   const addLead = addSheet('Leads', LEAD_HEADERS, [18, 28, 36, 22, 22, 18, 30, 30, 30, 30, 40, 50, 18, 10, 30, 30, 16, 40, 11, 11, 10, 20, 40, 50, 40, 14, 30, 12, 17, 14, 10, 18, 18, 16, 16, 40, 30, 16, 14]);
   const pageIds = [];
+  const pageKeywords = new Map();
   for await (const l of leadCursor(req.ws, req.query)) {
     addLead(leadRow(l));
     pageIds.push(l.pageId);
+    pageKeywords.set(l.pageId, new Set(l.keywords || []));
   }
-  const addAd = addSheet('Ads', AD_HEADERS, [18, 18, 28, 60, 30, 40, 16, 12, 20, 16, 40]);
+  const addAd = addSheet('Ads', AD_HEADERS, [18, 18, 28, 60, 30, 40, 16, 12, 20, 16, 40, 12, 14, 40, 24, 16]);
   for (let i = 0; i < pageIds.length; i += 1000) {
-    for await (const a of col('ads').find({ pageId: { $in: pageIds.slice(i, i + 1000) } }).sort({ pageId: 1 })) addAd(adRow(a));
+    for await (const a of col('ads').find({ pageId: { $in: pageIds.slice(i, i + 1000) } }).sort({ pageId: 1 })) addAd(adRow(a, pageKeywords.get(a.pageId)));
   }
   await wb.commit();
 }));

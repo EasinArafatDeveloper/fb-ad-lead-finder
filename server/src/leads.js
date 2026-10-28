@@ -570,7 +570,7 @@ export const LEAD_HEADERS = [
   'Followers', 'Likes', 'Active Ads', 'Keywords', 'Ad Landing Link', 'Sample Ad Text', 'Page Ads (Library)',
   'Status', 'Notes', 'Scrape Status', 'Scraped At',
   'Advertising Since', 'Running Days', 'Orders Via', 'Ad Formats', 'Website Type', 'Website Platform',
-  'Best Ad Hook', 'Offers', 'Price Range',
+  'Best Ad Hook', 'Offers', 'Ad Price Range',
   'Source',
 ];
 /** "search", "links" or both — where the lead came from (old leads: search). */
@@ -623,7 +623,7 @@ export const priceRange = (ins) => (ins?.priceMin == null ? '' : ins.priceMin ==
 
 export const AD_HEADERS = ['Ad ID', 'Page ID', 'Page Name', 'Ad Text', 'Headline', 'Landing Link', 'CTA', 'Start Date', 'Platforms', 'Keywords', 'Ad Link', 'Format', 'Order Via', 'Hook', 'Offers', 'Price'];
 
-export const adRow = (a) => [
+export const adRow = (a, myKeywords) => [
   a.adId,
   a.pageId,
   a.pageName || '',
@@ -633,7 +633,7 @@ export const adRow = (a) => [
   a.cta || '',
   a.startDate || '',
   (a.platforms || []).join(', '),
-  (a.keywords || [a.keyword]).filter(Boolean).join(', '),
+  (a.keywords || [a.keyword]).filter((k) => k && (!myKeywords || myKeywords.has(k))).join(', '),
   adLink(a.adId),
   formatName(a.format),
   orderChannel(a),

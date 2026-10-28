@@ -217,7 +217,15 @@ const textCell = (v) => (typeof v === 'number' ? { v, m: String(v), ct: { fa: 'G
 const isEmpty = (cell) => !cell || cell.v === undefined || cell.v === null || cell.v === '';
 
 async function sourceRows(item) {
-  if (item.kind === 'ads') return col('ads').find({ projectIds: item.projectId }).sort({ createdAt: 1 }).toArray();
+  if (item.kind === 'ads') {
+    const [ads, leadKws, jobKws] = await Promise.all([
+      col('ads').find({ projectIds: item.projectId }).sort({ createdAt: 1 }).toArray(),
+      col('leads').distinct('keywords', { workspaceId: item.workspaceId, projectIds: item.projectId }),
+      col('jobs').distinct('keyword', { workspaceId: item.workspaceId, projectId: item.projectId }),
+    ]);
+    const mine = new Set([...leadKws, ...jobKws].filter(Boolean));
+    return ads.map((a) => ({ ...a, keywords: (a.keywords || [a.keyword]).filter((k) => k && mine.has(k)) }));
+  }
   return col('leads').find(leadFilter(item)).sort({ createdAt: 1 }).toArray();
 }
 

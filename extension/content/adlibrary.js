@@ -168,6 +168,33 @@
     return els[els.length - 1] || null;
   }
 
+  /**
+   * In big scroll-mode searches (2,000–5,000+ ads), thousands of <video> and <img> elements pile up in the DOM
+   * and freeze the tab ("tab stopped responding"). Unload media far above the screen while keeping box height.
+   */
+  function trimOffscreenMedia() {
+    for (const v of document.querySelectorAll('video:not([data-fblf-trimmed])')) {
+      const r = v.getBoundingClientRect();
+      if (r.bottom < -2500) {
+        if (r.height > 0) v.style.minHeight = `${Math.round(r.height)}px`;
+        v.pause?.();
+        v.removeAttribute('src');
+        v.removeAttribute('poster');
+        v.load?.();
+        v.setAttribute('data-fblf-trimmed', '1');
+      }
+    }
+    for (const img of document.querySelectorAll('img[src]:not([data-fblf-trimmed])')) {
+      const r = img.getBoundingClientRect();
+      if (r.bottom < -2500 && r.height > 48) {
+        img.style.minHeight = `${Math.round(r.height)}px`;
+        img.removeAttribute('src');
+        img.removeAttribute('srcset');
+        img.setAttribute('data-fblf-trimmed', '1');
+      }
+    }
+  }
+
   /** 'done' (end of the results / max reached / stopped) or 'fallback' (the pager can't work here → scroll). */
   async function collectByPages() {
     let fails = 0;
@@ -330,13 +357,15 @@
           hiddenToldAt = Date.now();
           send({ type: 'adlib:hidden', keyword: job.keyword });
         }
-        await sleep(3000);
+        await waitOnce(3000);
         stall = 0;
         lastNewAt = Date.now();
         continue;
       }
       // every few scrolls ask the server whether this search was stopped from the dashboard
       if (++rounds % 3 === 0) {
+        await flush(false);
+        trimOffscreenMedia();
         // also the heartbeat: the server knows this tab is alive (silent 1 min = "not responding" on the Dashboard)
         // (no "stuck" note when Facebook simply has no more ads — near its own result count)
         const note = stall >= 3 && !nearEndOfResults(current().length) ? `Facebook loads no more ads here — ${pagerError || 'See more does nothing'}` : '';
@@ -378,17 +407,17 @@
             : `Scrolling… (${n} ads)`;
       render();
       window.scrollTo(0, document.documentElement.scrollHeight);
-      await sleep(1200);
+      await waitOnce(1200);
       // Facebook shows a "See more" bar instead of loading by itself → press it like a person would
       const more = seeMoreButton();
       if (more) {
         more.scrollIntoView({ block: 'center' });
         more.click();
       }
-      await sleep(1500 + Math.random() * 2000);
+      await waitOnce(Math.round(1500 + Math.random() * 2000));
       if (stall >= 3) {
         window.scrollBy(0, -600);
-        await sleep(600);
+        await waitOnce(600);
       }
     }
     if (disconnected) return; // keep job + sent saved: after a page reload collecting goes on

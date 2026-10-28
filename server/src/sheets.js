@@ -66,11 +66,16 @@ export async function syncSheet(ws, all = false) {
     const s = await getWsSettings(ws);
     const startedAt = new Date();
     const projectIds = await col('projects').distinct('_id', { workspaceId: ws });
+    const [leadKws, jobKws] = await Promise.all([
+      col('leads').distinct('keywords', { workspaceId: ws }),
+      col('jobs').distinct('keyword', { workspaceId: ws }),
+    ]);
+    const myKeywords = new Set([...leadKws, ...jobKws].filter(Boolean));
     const adFilter = { projectIds: { $in: projectIds }, ...(all || !s.adsSyncedAt ? {} : { updatedAt: { $gt: new Date(s.adsSyncedAt) } }) };
     const ads = await col('ads').find(adFilter).sort({ createdAt: 1 }).toArray();
     for (let i = 0; i < ads.length; i += 500) {
       const chunk = ads.slice(i, i + 500);
-      await sheetRequest(ws, { action: 'upsert', sheet: 'Ads', key: 'Ad ID', headers: AD_HEADERS, rows: chunk.map(adRow) });
+      await sheetRequest(ws, { action: 'upsert', sheet: 'Ads', key: 'Ad ID', headers: AD_HEADERS, rows: chunk.map((a) => adRow(a, myKeywords)) });
     }
     await col('workspaces').updateOne({ _id: ws }, { $set: { 'settings.lastSyncAt': new Date(), 'settings.adsSyncedAt': startedAt } });
     return { inserted, updated, ads: ads.length };
