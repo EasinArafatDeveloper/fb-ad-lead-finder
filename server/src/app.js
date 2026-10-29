@@ -126,6 +126,32 @@ export function createApp() {
     res.type('text/plain').sendFile(path.join(here, '..', '..', 'apps-script', 'Code.gs')),
   );
 
+  // SEO files: handle both with and without trailing slash so Google Search Console never hits the SPA fallback
+  const distDir = path.join(here, '..', '..', 'dashboard', 'dist');
+  app.get(['/sitemap.xml', '/sitemap.xml/', '/sitemap_index.xml', '/sitemap-index.xml'], (req, res) => {
+    log('info', `Sitemap XML requested by ${req.get('user-agent') || 'unknown'} (${req.get('cf-connecting-ip') || req.ip})`).catch(() => {});
+    res.removeHeader('Content-Security-Policy');
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.sendFile(path.join(distDir, 'sitemap.xml'));
+  });
+  app.get(['/sitemap.txt', '/sitemap.txt/'], (req, res) => {
+    log('info', `Sitemap TXT requested by ${req.get('user-agent') || 'unknown'} (${req.get('cf-connecting-ip') || req.ip})`).catch(() => {});
+    res.removeHeader('Content-Security-Policy');
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.sendFile(path.join(distDir, 'sitemap.txt'));
+  });
+  app.get(['/robots.txt', '/robots.txt/'], (_req, res) => {
+    res.removeHeader('Content-Security-Policy');
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.sendFile(path.join(distDir, 'robots.txt'));
+  });
+
   // the Chrome extension
   app.use('/api/worker', requireWorker, dbReady, rememberWorker, workerRoutes);
 
