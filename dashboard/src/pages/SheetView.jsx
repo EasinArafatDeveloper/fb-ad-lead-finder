@@ -38,12 +38,16 @@ export default function SheetView() {
   const [busy, setBusy] = useState('');
   const pending = useRef(null);
   const timer = useRef(null);
+  const initMount = useRef(true);
   // the server's version of the copy we're editing — a save from an older copy never deletes rows
   const sheetVersion = useRef(0);
 
   const load = useCallback(async () => {
     const r = await api(`/sheets/${sid}`);
     sheetVersion.current = r.version || 0;
+    pending.current = null;
+    initMount.current = true;
+    setSaveState('saved');
     setMeta({ item: r.item, project: r.project, path: r.path });
     // start with A1 selected — without a selection FortuneSheet's name box shows "NaN"
     setSheets(r.sheets.map((s) => ({ ...s, luckysheet_select_save: s.luckysheet_select_save || [{ row: [0, 0], column: [0, 0] }] })));
@@ -74,6 +78,10 @@ export default function SheetView() {
 
   const onChange = useCallback(
     (data) => {
+      if (initMount.current) {
+        initMount.current = false;
+        return;
+      }
       pending.current = data;
       setSaveState('dirty');
       clearTimeout(timer.current);
@@ -159,20 +167,20 @@ export default function SheetView() {
 
         {live && (
           <span className="hidden items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30 md:inline-flex" title="New leads are added to this sheet automatically. Your edits are kept.">
-            <Zap className="h-3.5 w-3.5" /> Live · {formatNumber(meta.item.count)} rows
+            <Zap className="h-3.5 w-3.5" /> <span>Live · {formatNumber(meta.item.count)} rows</span>
           </span>
         )}
 
         <div className="ml-auto flex items-center gap-2">
           <span role="status" aria-live="polite" className={cn('flex items-center gap-1.5 text-xs font-medium', saveState === 'error' ? 'text-rose-600' : 'text-slate-500')}>
-            {saveState === 'saving' && <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…</>}
-            {saveState === 'dirty' && <><CloudUpload className="h-3.5 w-3.5" /> Unsaved</>}
-            {saveState === 'saved' && <><Check className="h-3.5 w-3.5 text-emerald-500" /> Saved</>}
-            {saveState === 'error' && 'Save failed'}
+            {saveState === 'saving' && <span key="saving" className="inline-flex items-center gap-1.5"><Loader2 className="h-3.5 w-3.5 animate-spin" /> <span>Saving…</span></span>}
+            {saveState === 'dirty' && <span key="dirty" className="inline-flex items-center gap-1.5"><CloudUpload className="h-3.5 w-3.5" /> <span>Unsaved</span></span>}
+            {saveState === 'saved' && <span key="saved" className="inline-flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> <span>Saved</span></span>}
+            {saveState === 'error' && <span key="error">Save failed</span>}
           </span>
           {live && (
             <Button size="sm" onClick={refreshData} loading={busy === 'refresh'} title="Load new leads from the database">
-              {busy !== 'refresh' && <RefreshCw className="h-3.5 w-3.5" />} New data
+              {busy !== 'refresh' && <RefreshCw className="h-3.5 w-3.5" />} <span>New data</span>
             </Button>
           )}
           <Button
@@ -182,7 +190,7 @@ export default function SheetView() {
             onClick={canExcel ? exportXlsx : () => toast.message('Excel export is not in your plan', { description: 'Upgrade in Billing — or use CSV on the All Leads page.' })}
             loading={busy === 'export'}
           >
-            {busy !== 'export' && (canExcel ? <Download className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5 text-slate-400" />)} Excel
+            {busy !== 'export' && (canExcel ? <Download className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5 text-slate-400" />)} <span>Excel</span>
           </Button>
         </div>
       </div>

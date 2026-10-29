@@ -28,7 +28,7 @@ export const Button = forwardRef(function Button({ variant = 'outline', size = '
       {...props}
     >
       {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-      {children}
+      <span className="inline-flex items-center gap-1.5">{children}</span>
     </button>
   );
 });

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LeadBazaar BD — B2B Verified Business Data Marketplace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card: #131b2e;
+      --card-alt: #19233c;
+      --border: #263354;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --emerald: #10b981;
+      --amber: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: radial-gradient(circle at top right, #1e1b4b 0%, var(--bg) 45%);
+      color: var(--text);
+      font-family: 'Inter', 'Hind Siliguri', sans-serif;
+      line-height: 1.6;
+      padding: 28px 18px 60px;
+    }
+    .container { max-width: 1160px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 20px 45px -15px rgba(0,0,0,0.45);
+    }
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 600;
+      background: rgba(99, 102, 241, 0.15); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35);
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 10px var(--emerald); }
+    h1 { font-size: clamp(26px, 4vw, 42px); font-weight: 800; line-height: 1.2; margin-top: 16px; letter-spacing: -0.02em; }
+    .highlight { background: linear-gradient(90deg, #818cf8, #34d399); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .lead { color: var(--muted); font-size: 16px; max-width: 880px; margin-top: 12px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: 14px; margin-top: 24px; }
+    .stat-box { background: var(--card-alt); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+    .stat-label { font-size: 13px; color: var(--muted); font-weight: 500; }
+    .stat-val { font-size: 28px; font-weight: 800; margin-top: 4px; color: #fff; }
+    .stat-sub { font-size: 12px; margin-top: 4px; color: var(--emerald); font-weight: 600; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
+    .section-tag { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; color: #818cf8; }
+    h2 { font-size: 22px; font-weight: 700; margin-top: 4px; }
+    .list { list-style: none; margin-top: 14px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--muted); }
+    .list li strong { color: var(--text); }
+    .persona-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 14px; }
+    .persona-btn {
+      text-align: left; padding: 16px; border-radius: 14px; cursor: pointer;
+      background: var(--card-alt); border: 2px solid var(--border); color: var(--text); transition: all 0.2s;
+      font-family: inherit;
+    }
+    .persona-btn:hover { border-color: #6366f1; transform: translateY(-2px); }
+    .persona-btn.active { border-color: #6366f1; background: rgba(99, 102, 241, 0.16); }
+    .persona-title { font-size: 15px; font-weight: 700; }
+    .persona-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+    .filter-bar {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;
+      align-items: center; background: var(--card-alt); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px; margin-top: 18px;
+    }
+    select {
+      width: 100%; padding: 10px 12px; border-radius: 10px; background: var(--card);
+      border: 1px solid var(--border); color: var(--text); font-size: 14px; margin-top: 6px; font-family: inherit;
+    }
+    .rule-box {
+      padding: 10px 12px; border-radius: 10px; background: var(--card);
+      border: 1px solid var(--border); font-size: 12px; color: #a5b4fc; margin-top: 6px; font-family: monospace;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #4f46e5); color: #fff; border: none;
+      padding: 10px 18px; border-radius: 12px; font-weight: 600; font-size: 13px; cursor: pointer; font-family: inherit;
+    }
+    .btn-primary:hover { opacity: 0.92; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; margin-top: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+    th { background: var(--card-alt); color: var(--muted); padding: 12px 16px; font-weight: 600; border-bottom: 1px solid var(--border); }
+    td { padding: 13px 16px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    .pill { display: inline-block; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 600; background: rgba(16, 185, 129, 0.15); color: #34d399; }
+    .pitch-box { background: var(--card-alt); border: 1px dashed #4f46e5; border-radius: 14px; padding: 16px; margin-top: 18px; }
+    .step-flow { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+    .step-item { background: var(--card-alt); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; }
+    .pack-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; text-align: center; }
+    .pack { background: var(--card-alt); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+    .pack.popular { border: 2px solid #6366f1; }
+    input[type="range"] { width: 100%; accent-color: #6366f1; margin-top: 8px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Hero Section -->
+    <header class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <span class="badge"><span class="dot"></span> Product Pitch &amp; Interactive Prototype · Powered by Specter Data Engine</span>
+        <span style="font-size:12px; color:var(--muted);">Live Database Status: <strong style="color:#fff;">71,347 Active BD Businesses</strong></span>
+      </div>
+      <h1>Data-as-a-Service: <span class="highlight">Smart B2B Lead Marketplace</span></h1>
+      <p class="lead">
+        আমাদের প্রথম প্ল্যাটফর্ম (<strong>FB Ad Lead Finder</strong>) প্রতিদিন স্বয়ংক্রিয়ভাবে বাংলাদেশের হাজার হাজার রানিং ব্যবসার ডাটা সংগ্রহ করছে।
+        এই ডাটার ওপর ভিত্তি করে আমরা তৈরি করছি <strong>দ্বিতীয় প্ল্যাটফর্ম</strong>—যেখানে <strong>ফ্রিল্যান্সার, উদ্যোক্তা, ডিলার ও সাপ্লায়াররা</strong> কোনো স্ক্র্যাপিং ঝামেলা ছাড়াই ৩০ সেকেন্ডের একটি সার্ভে পূরণ করে তাদের ব্যবসার জন্য রেডিমেড কাস্টমার ডাটা কিনতে পারবে।
+      </p>
+
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-label">মোট স্ক্র্যাপ করা বিজনেস পেজ</div>
+          <div class="stat-val">71,347</div>
+          <div class="stat-sub">100% Active FB Advertisers</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">সরাসরি কন্টাক্টসহ ভেরিফাইড ব্যবসা</div>
+          <div class="stat-val">60,320</div>
+          <div class="stat-sub">84.5% Contact Rate</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">ভেরিফাইড ফোন ও WhatsApp</div>
+          <div class="stat-val">49,788</div>
+          <div class="stat-sub">22,564 Direct WhatsApp</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">ভেরিফাইড বিজনেস ইমেইল</div>
+          <div class="stat-val">45,645</div>
+          <div class="stat-sub">Page + Website Crawled</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">অ্যাড চালাচ্ছে কিন্তু Website নেই</div>
+          <div class="stat-val">22,642</div>
+          <div class="stat-sub" style="color:#fbbf24;">Hot Leads for Web Devs!</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Two Engine Concept -->
+    <section class="grid-2">
+      <div class="card">
+        <div class="section-tag">Engine 01 · Current Platform</div>
+        <h2>FB Ad Lead Finder (Data Factory)</h2>
+        <p style="font-size:14px; color:var(--muted); margin-top:8px;">
+          আমাদের বর্তমান সিস্টেম যা ২৪/৭ ফেসবুক অ্যাড লাইব্রেরি, পেজ এবং ওয়েবসাইট স্ক্র্যাপ করে সেন্ট্রাল ডাটাবেস আপডেট রাখে।
+        </p>
+        <ul class="list">
+          <li>✅ <strong>71,347+</strong> পেজ এবং <strong>82,932+</strong> লিড অলরেডি ডাটাবেসে প্রস্তুত</li>
+          <li>✅ ক্যাটাগরি, ফোন, হোয়াটসঅ্যাপ, ইমেইল, ওয়েবসাইট প্ল্যাটফর্ম ও অ্যাড সংখ্যা</li>
+          <li>✅ নতুন প্ল্যাটফর্মের সাথে একটি সিকিউর <strong>Internal Partner API</strong> দিয়ে যুক্ত থাকবে</li>
+        </ul>
+      </div>
+
+      <div class="card" style="border-color:#6366f1;">
+        <div class="section-tag" style="color:#34d399;">Engine 02 · New Platform Idea</div>
+        <h2>Smart B2B Lead Storefront (No Scraping Needed)</h2>
+        <p style="font-size:14px; color:var(--muted); margin-top:8px;">
+          সাধারণ ফ্রিল্যান্সার বা ব্যবসায়ীরা স্ক্র্যাপ করতে চায় না—তারা চায় রেডি কাস্টমার। তারা এই সাইটে ঢুকে শুধু বলবে তাদের কাদের ডাটা দরকার!
+        </p>
+        <ul class="list">
+          <li>🎯 <strong>Smart Survey Matching:</strong> ইউজারের সার্ভিস অনুযায়ী অটোমেটিক কাস্টমার ম্যাচিং</li>
+          <li>💳 <strong>Pay-Per-Pack:</strong> ১০০ / ৫০০ / ২,০০০ লিডের সাশ্রয়ী প্যাক (bKash / Nagad)</li>
+          <li>💬 <strong>1-Click WhatsApp Pitch:</strong> লিড আনলক করে এক ক্লিকেই কাস্টম মেসেজ পাঠানোর সুবিধা</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Live Interactive Survey & Matcher -->
+    <section class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <div>
+          <div class="section-tag">Interactive Live Demo (Click Below to Test)</div>
+          <h2>ধাপ ১: স্মার্ট কাস্টমার সার্ভে ("আপনি কী করেন এবং কাদের খুঁজছেন?")</h2>
+        </div>
+        <button id="unlockBtn" class="btn-primary">🔓 Simulate "Unlock Leads after Payment"</button>
+      </div>
+
+      <div class="persona-grid" id="personaGrid"></div>
+
+      <div class="filter-bar">
+        <div>
+          <div style="font-size:12px; color:var(--muted); font-weight:600;">টার্গেট বিজনেস ক্যাটাগরি নির্বাচন করুন:</div>
+          <select id="catSelect">
+            <option value="all">All Categories (সব ক্যাটাগরি)</option>
+            <option value="clothing">Clothing &amp; Fashion (পোশাক ও ফ্যাশন - 4,081+)</option>
+            <option value="beauty">Beauty &amp; Cosmetics (কসমেটিকস ও স্কিনকেয়ার - 1,831+)</option>
+            <option value="gadget">Shopping, Retail &amp; Gadgets (গ্যাজেট ও শপিং - 1,962+)</option>
+            <option value="health">Medical, Health &amp; Education (হেলথ ও এডুকেশন - 1,702+)</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:12px; color:var(--muted); font-weight:600;">API অটোমেটিক ফিল্টার রুল (Smart Query):</div>
+          <div class="rule-box" id="ruleBox"></div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:12px; color:var(--muted);">আসল ডাটাবেসে ম্যাচ করা ব্যবসা:</div>
+          <div id="matchCount" style="font-size:28px; font-weight:800; color:var(--emerald);">22,642 Leads</div>
+          <div id="modeLabel" style="font-size:12px; color:var(--amber);">Preview Mode (Numbers Masked)</div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Business Page</th>
+              <th>Category</th>
+              <th>Ad Status</th>
+              <th>কেন এরা আপনার কাস্টমার হবে?</th>
+              <th>Phone / WhatsApp</th>
+              <th>Email</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="leadRows"></tbody>
+        </table>
+      </div>
+
+      <div class="pitch-box">
+        <div style="font-size:12px; font-weight:700; color:#a5b4fc; margin-bottom:4px;">
+          💬 Auto-Generated 1-Click WhatsApp Sales Pitch (লিডে ক্লিক করলে যে মেসেজ রেডি হবে):
+        </div>
+        <div id="pitchText" style="font-size:14px; color:#fff; font-style:italic;"></div>
+      </div>
+    </section>
+
+    <!-- Architecture & Business Model -->
+    <section class="grid-2">
+      <div class="card">
+        <div class="section-tag">System Architecture</div>
+        <h2>দুই প্ল্যাটফর্ম যেভাবে কাজ করবে</h2>
+        <div class="step-flow">
+          <div class="step-item">
+            <div>
+              <div style="font-weight:700; font-size:14px;">1. FB Ad Lead Finder (Data Engine)</div>
+              <div style="font-size:12px; color:var(--muted);">ব্যাকগ্রাউন্ডে প্রতিদিন নতুন অ্যাড ও বিজনেস পেজ স্ক্র্যাপ করে</div>
+            </div>
+            <span class="pill">24/7 Live</span>
+          </div>
+          <div style="text-align:center; color:#818cf8; font-size:12px; font-weight:700;">⬇ Internal Partner API (/api/partner/leads) ⬇</div>
+          <div class="step-item">
+            <div>
+              <div style="font-weight:700; font-size:14px;">2. Smart Survey &amp; Deduplication Engine</div>
+              <div style="font-size:12px; color:var(--muted);">কাস্টমারের পেশা অনুযায়ী ফিল্টার করে এবং ডুপ্লিকেট লিড বাদ দেয়</div>
+            </div>
+            <span class="pill">Auto-Match</span>
+          </div>
+          <div style="text-align:center; color:#818cf8; font-size:12px; font-weight:700;">⬇ bKash / Nagad Instant Unlock ⬇</div>
+          <div class="step-item">
+            <div>
+              <div style="font-weight:700; font-size:14px;">3. Customer Portal (Excel + CRM + WhatsApp)</div>
+              <div style="font-size:12px; color:var(--muted);">কাস্টমার টাকা দিয়ে লিড আনলক করে ও এক ক্লিকে মেসেজ পাঠায়</div>
+            </div>
+            <span class="pill">High Profit</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-tag">Monetization &amp; Pricing</div>
+        <h2>রেভিনিউ মডেল (একই ডাটা বারবার বিক্রি)</h2>
+        <p style="font-size:13px; color:var(--muted); margin-top:6px;">
+          আমাদের সার্ভার ও ডাটাবেস অলরেডি রানিং—তাই নতুন প্ল্যাটফর্মে প্রতিটি সেল ১০০% প্রফিট:
+        </p>
+        <div class="pack-grid">
+          <div class="pack">
+            <div style="font-size:12px; color:var(--muted);">Starter Pack</div>
+            <div style="font-size:18px; font-weight:800; margin-top:4px;">100 Leads</div>
+            <div style="font-size:14px; font-weight:700; color:var(--emerald); margin-top:4px;">৳499</div>
+          </div>
+          <div class="pack popular">
+            <div style="font-size:12px; color:#a5b4fc; font-weight:700;">Pro Pack</div>
+            <div style="font-size:18px; font-weight:800; margin-top:4px;">500 Leads</div>
+            <div style="font-size:14px; font-weight:700; color:var(--emerald); margin-top:4px;">৳1,499</div>
+          </div>
+          <div class="pack">
+            <div style="font-size:12px; color:var(--muted);">Dealer / Agency</div>
+            <div style="font-size:18px; font-weight:800; margin-top:4px;">2,000 Leads</div>
+            <div style="font-size:14px; font-weight:700; color:var(--emerald); margin-top:4px;">৳3,999</div>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;">
+          <div style="display:flex; justify-content:space-between; font-size:13px;">
+            <span>মাসিক কাস্টমার সংখ্যা (Monthly Buyers):</span>
+            <strong id="buyerLabel">100 Buyers / month</strong>
+          </div>
+          <input type="range" id="buyerRange" min="20" max="500" step="10" value="100" />
+          <div class="step-item" style="margin-top:12px;">
+            <div>
+              <div style="font-size:12px; color:var(--muted);">আনুমানিক মাসিক আয় (গড়ে ৳1,200/কাস্টমার)</div>
+              <div style="font-size:11px; color:var(--emerald);">Zero extra scraping cost</div>
+            </div>
+            <div id="revLabel" style="font-size:24px; font-weight:800; color:var(--emerald);">৳1,20,000 / mo</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="/pitch-v2.js"></script>
+</body>
+</html>

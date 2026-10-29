@@ -3,6 +3,20 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import './index.css';
+
+// Guard against Chrome Google Translate & third-party extensions mutating text nodes inside React-managed DOM
+if (typeof Node === 'function' && Node.prototype) {
+  const origRemoveChild = Node.prototype.removeChild;
+  Node.prototype.removeChild = function (child) {
+    if (child && child.parentNode !== this) return child;
+    return origRemoveChild.apply(this, arguments);
+  };
+  const origInsertBefore = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function (newNode, referenceNode) {
+    if (referenceNode && referenceNode.parentNode !== this) return newNode;
+    return origInsertBefore.apply(this, arguments);
+  };
+}
 import Layout from './components/Layout';
 import Auth from './pages/Auth';
 import Landing from './pages/Landing';
@@ -120,13 +134,48 @@ function App() {
 class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { retries: 0 };
+    this.state = { retries: 0, error: null };
   }
-  componentDidCatch() {
-    if (this.state.retries < 2) this.setState((s) => ({ retries: s.retries + 1 }));
-    else window.location.reload();
+  componentDidCatch(error) {
+    if (this.state.retries < 2) {
+      this.setState((s) => ({ retries: s.retries + 1, error: null }));
+      return;
+    }
+    try {
+      const key = 'fblf_err_reload';
+      const now = Date.now();
+      const last = Number(sessionStorage.getItem(key) || 0);
+      if (now - last > 15000) {
+        sessionStorage.setItem(key, String(now));
+        window.location.reload();
+        return;
+      }
+    } catch {
+      /* ignore storage errors */
+    }
+    this.setState({ error });
   }
   render() {
+    if (this.state.error) {
+      return (
+        <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-8 text-center">
+          <h1 className="font-display text-lg font-bold text-slate-900 dark:text-white">Something interrupted this page</h1>
+          <p className="max-w-md text-sm text-slate-500">{this.state.error?.message || 'A browser extension or translator modified the page.'}</p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => this.setState({ retries: 0, error: null })}
+              className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+            >
+              Try again
+            </button>
+            <a href="/projects" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              Back to Projects
+            </a>
+          </div>
+        </div>
+      );
+    }
     return <div key={this.state.retries}>{this.props.children}</div>;
   }
 }
