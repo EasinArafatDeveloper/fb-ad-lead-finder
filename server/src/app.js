@@ -161,6 +161,9 @@ export function createApp() {
         if (/[\\/]assets[\\/]/.test(p)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         else if (/[\\/]sw\.js$/.test(p)) res.setHeader('Cache-Control', 'no-cache'); // the push service worker updates at once
         else if (/[\\/]downloads[\\/]/.test(p)) res.setHeader('Cache-Control', 'no-cache'); // always the latest extension
+        else if (/[\\/]sitemap\.xml$/i.test(p)) res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+        else if (/[\\/]robots\.txt$/i.test(p)) res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        else if (/[\\/]site\.webmanifest$/i.test(p)) res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
       },
     }),
   );

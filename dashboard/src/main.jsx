@@ -45,6 +45,40 @@ import { Skeleton } from './components/ui';
 // the spreadsheet editor is heavy — load it only when a sheet is opened
 const SheetView = lazy(() => import('./pages/SheetView'));
 
+const PUBLIC_SEO = {
+  '/': {
+    title: 'FB Ad Lead Finder — Find Active Facebook & Instagram Advertisers with Phone, WhatsApp & Email',
+    canonical: 'https://specter.monster/',
+  },
+  '/pricing': {
+    title: 'Pricing — FB Ad Lead Finder | Meta Ad Library Lead Extractor',
+    canonical: 'https://specter.monster/pricing',
+  },
+  '/signup': {
+    title: 'Start Free — FB Ad Lead Finder | Get Verified Advertiser Leads',
+    canonical: 'https://specter.monster/signup',
+  },
+  '/login': {
+    title: 'Log In — FB Ad Lead Finder | specter.monster',
+    canonical: 'https://specter.monster/login',
+  },
+};
+
+function SeoTracker() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const pub = PUBLIC_SEO[pathname];
+    document.title = pub ? pub.title : 'FB Ad Lead Finder — Dashboard';
+    const canonical = document.getElementById('canonical-link');
+    if (canonical) canonical.setAttribute('href', pub ? pub.canonical : `https://specter.monster${pathname}`);
+    const robots = document.querySelector('meta[name="robots"]');
+    if (robots) {
+      robots.setAttribute('content', pub ? 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1' : 'noindex, nofollow');
+    }
+  }, [pathname]);
+  return null;
+}
+
 /** Pages behind the login: a visitor goes to /login and comes back afterwards. */
 function NeedLogin() {
   const loc = useLocation();
@@ -184,6 +218,7 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <ErrorBoundary>
       <BrowserRouter>
+        <SeoTracker />
         <App />
         <Toaster position="bottom-right" richColors closeButton />
       </BrowserRouter>
