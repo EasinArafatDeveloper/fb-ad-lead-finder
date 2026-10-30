@@ -10,6 +10,7 @@ import { col, connect, log } from './db.js';
 import { authRoutes, loadUser, requireAdmin, requireUser, requireVerified, requireWorker, sameOrigin } from './auth.js';
 import routes from './routes.js';
 import projectRoutes from './projectRoutes.js';
+import commentRoutes from './commentRoutes.js';
 import adminRoutes from './admin.js';
 import workerRoutes from './worker.js';
 import { touchPc } from './pcs.js';
@@ -165,6 +166,7 @@ export function createApp() {
   app.use('/api', requireVerified); // a new account: only the code page until the email is confirmed
   app.use('/api/admin', requireAdmin, adminRoutes);
   app.use('/api', billingUserRoutes);
+  app.use('/api/comments', commentRoutes);
   app.use('/api', routes);
   app.use('/api', projectRoutes);
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));

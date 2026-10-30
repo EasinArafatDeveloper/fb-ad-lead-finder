@@ -25,6 +25,7 @@ import Explorer from './pages/Explorer';
 import Insights from './pages/Insights';
 import Searches from './pages/Searches';
 import PasteLinks from './pages/PasteLinks';
+import PostComments from './pages/PostComments';
 import Leads from './pages/Leads';
 import Settings from './pages/Settings';
 import Billing from './pages/Billing';
@@ -140,6 +141,7 @@ function App() {
           />
           <Route path="search" element={<Searches />} />
           <Route path="links" element={<PasteLinks />} />
+          <Route path="comments" element={<PostComments />} />
           <Route path="leads" element={<Leads />} />
           <Route path="leads/insights" element={<Insights scope="leads" />} />
           <Route path="settings" element={<Settings />} />
