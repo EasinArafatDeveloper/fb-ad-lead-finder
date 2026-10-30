@@ -9,6 +9,7 @@ import { getSettings } from './settings.js';
 import { oid, projectStats } from './projects.js';
 import { LEAD_HEADERS, buildFilter, leadRow, leadsCursor } from './leads.js';
 import { serverReaderNow } from './serverReader.js';
+import { serverCollectorActiveCount, serverCollectorLanes, serverCollects } from './adlibCollector.js';
 import { pcName } from './pcs.js';
 import { accountOf } from './billing.js';
 
@@ -73,12 +74,23 @@ export async function liveActivity() {
     const acc = await accountOf(id);
     const jobDTO = (j) => {
       const c = counts.get(String(j._id)) || {};
+      const ads = j.adsSeen || 0;
+      const maxAds = j.maxAds || 20000;
+      const totalResults =
+        j.totalResults != null
+          ? Math.max(j.totalResults, ads)
+          : j.phase === 'collected' && ads > 0 && ads < maxAds
+            ? j.captured || ads
+            : null;
+      const targetAds = totalResults != null && totalResults > 0 ? Math.min(maxAds, totalResults) : maxAds;
+      const remainingAds = j.phase === 'collecting' ? Math.max(0, targetAds - ads) : 0;
       return {
         id: String(j._id), keyword: j.keyword, country: j.country, kind: j.kind || 'search', phase: j.phase, manual: !!j.manual,
-        ads: j.adsSeen || 0, maxAds: j.maxAds || null, pages: (j.pageIds || []).length, read: c.read || 0, pendingPages: c.pending || 0, withContact: c.withContact || 0,
+        ads, maxAds: j.maxAds || null, totalResults, targetAds, remainingAds, pagesFetched: j.pagesFetched || 1,
+        pages: (j.pageIds || []).length, read: c.read || 0, pendingPages: c.pending || 0, withContact: c.withContact || 0,
         createdAt: j.createdAt, startedAt: j.startedAt || null, collectedAt: j.collectedAt || null, silentSec: j.phase === 'collecting' ? secAgo(j.lastActivity || j.startedAt) : null,
         tabHidden: !!j.tabHidden, note: j.stuckNote || (j.note && !['done', 'pasted links'].includes(j.note) ? j.note : ''), projectId: j.projectId ? String(j.projectId) : null,
-        pc: j.collector === 'server' ? { name: 'Server (Background)', version: 'server', ip: 'proxy-pool', mode: 'pager', online: true } : pcDTO(pcOf.get(j.collector)),
+        pc: j.collector === 'server' ? { name: 'Server (Background)', version: 'cloud', ip: 'proxy-pool', mode: 'pager', online: true } : pcDTO(pcOf.get(j.collector)),
       };
     };
     const p = pendingOf.get(key) || {};
@@ -105,6 +117,9 @@ export async function liveActivity() {
       readingNow: serverReaderNow(), pagesLastMin: minute, pagesLast5min: five,
       queue: await col('pages').countDocuments({ scrapeStatus: 'pending' }),
       computersOnline: pcs.length,
+      serverCollector: serverCollects(s),
+      serverCollectingNow: serverCollectorActiveCount(),
+      serverCollectorLanes: serverCollectorLanes(),
     },
     accounts,
   };

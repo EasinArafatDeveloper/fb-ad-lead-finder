@@ -185,44 +185,93 @@ function BoardCard({ j, stage, position, onStop, onRemove, admin }) {
         )}
       </div>
 
-      {stage === 'collecting' && (
-        <div className="mt-2.5">
-          <div className="flex items-baseline justify-between text-xs">
-            <span className="font-semibold text-indigo-700 dark:text-indigo-300">{formatNumber(j.adsSeen || 0)} ads</span>
-            <span className="text-slate-500">of max {formatNumber(j.maxAds)}</span>
+      {stage === 'collecting' && (() => {
+        const collected = j.adsSeen || 0;
+        const totalOnFb = j.totalResults != null ? Math.max(j.totalResults, collected) : null;
+        const target = totalOnFb != null && totalOnFb > 0 ? Math.min(j.maxAds || 20000, totalOnFb) : (j.maxAds || 20000);
+        const remaining = totalOnFb != null ? Math.max(0, target - collected) : null;
+        const progressPct = Math.min(100, pct(collected, target));
+        const etaMin = remaining != null && remaining > 0 ? Math.max(1, Math.ceil(remaining / 750)) : null;
+        return (
+          <div className="mt-2.5">
+            <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-slate-50 p-2 text-center ring-1 ring-inset ring-slate-200/70 dark:bg-white/[0.04] dark:ring-white/10">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">FB Results</div>
+                <div className="mt-0.5 text-xs font-extrabold tabular-nums text-slate-800 dark:text-slate-100">
+                  {totalOnFb != null ? formatNumber(totalOnFb) : <span className="text-[11px] font-medium text-slate-400">Scanning…</span>}
+                </div>
+              </div>
+              <div className="border-x border-slate-200/70 px-1 dark:border-white/10">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-indigo-500 dark:text-indigo-300">Collected</div>
+                <div className="mt-0.5 text-xs font-extrabold tabular-nums text-indigo-700 dark:text-indigo-300">
+                  {formatNumber(collected)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Remaining</div>
+                <div className="mt-0.5 text-xs font-extrabold tabular-nums text-amber-700 dark:text-amber-300">
+                  {remaining != null ? formatNumber(remaining) : '…'}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-2 flex items-baseline justify-between text-[11px]">
+              <span className="font-semibold text-indigo-700 dark:text-indigo-300">
+                {progressPct}% {totalOnFb != null ? `of ${formatNumber(target)} target` : `of max ${formatNumber(j.maxAds)}`}
+              </span>
+              <span className="text-slate-500">
+                {etaMin ? `~${etaMin} min left · ` : ''}max {formatNumber(j.maxAds)}
+              </span>
+            </div>
+            <div className="mt-1"><Progress value={progressPct} /></div>
+            {j.tabHidden && (
+              <p className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-snug text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+                Waiting — the Ad Library tab{admin && j.pc ? ` on ${j.pc}` : ''} is in the background. Bring it to the front: Facebook only loads more ads while it is visible.
+              </p>
+            )}
+            {j.stuckNote && !j.tabHidden && (
+              <p className="mt-2 rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] font-semibold leading-snug text-rose-800 dark:bg-rose-500/10 dark:text-rose-200">
+                {admin ? j.stuckNote : 'Retrying connection in the background…'}
+              </p>
+            )}
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500">
+                <b className="text-slate-700 dark:text-slate-200">{formatNumber(j.pageCount)}</b> pages found{j.scraped > 0 ? ` · ${formatNumber(j.scraped)} read` : ''}
+              </span>
+              <button onClick={() => onStop(j)} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10">
+                <CircleStop className="h-3 w-3" /> Stop
+              </button>
+            </div>
           </div>
-          <div className="mt-1"><Progress value={pct(j.adsSeen || 0, j.maxAds)} /></div>
-          {j.tabHidden && (
-            <p className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] font-semibold leading-snug text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
-              Waiting — the Ad Library tab{admin && j.pc ? ` on ${j.pc}` : ''} is in the background. Bring it to the front: Facebook only loads more ads while it is visible.
-            </p>
-          )}
-          {j.stuckNote && !j.tabHidden && (
-            <p className="mt-2 rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] font-semibold leading-snug text-rose-800 dark:bg-rose-500/10 dark:text-rose-200">
-              {admin ? `${j.stuckNote}. Facebook often blocks server (datacenter) IPs — use a home internet connection.` : 'Facebook is not showing more ads for this search right now.'}
-            </p>
-          )}
-          <div className="mt-2 flex items-center justify-between">
-            <span className="text-[11px] text-slate-500">{formatNumber(j.pageCount)} pages found so far</span>
-            <button onClick={() => onStop(j)} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10">
-              <CircleStop className="h-3 w-3" /> Stop
-            </button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
       {stage === 'reading' && (
         <div className="mt-2.5">
+          {j.adsSeen > 0 && (
+            <div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-500">
+              <span>Ads collected: <b className=" tabular-nums text-slate-700 dark:text-slate-200">{formatNumber(j.adsSeen)}</b>{j.totalResults != null ? ` of ${formatNumber(j.totalResults)} on FB` : ''}</span>
+              <span className="text-emerald-600 dark:text-emerald-400">0 left</span>
+            </div>
+          )}
           <div className="flex items-baseline justify-between text-xs">
-            <span className="font-semibold text-sky-700 dark:text-sky-300">{formatNumber(j.scraped)}/{formatNumber(j.pageCount)} pages</span>
+            <span className="font-semibold text-sky-700 dark:text-sky-300">{formatNumber(j.scraped)}/{formatNumber(j.pageCount)} pages read</span>
             <span className="text-slate-500">{formatNumber(j.withContact)} with contact</span>
           </div>
           <div className="mt-1"><Progress value={pct(j.scraped, j.pageCount)} /></div>
         </div>
       )}
       {stage === 'done' && (
-        <p className="mt-2 text-xs">
-          <b className="text-emerald-700 dark:text-emerald-300">{formatNumber(j.withContact)}</b> <span className="text-slate-500">contacts from {formatNumber(j.pageCount)} pages</span>
-        </p>
+        <div className="mt-2 space-y-0.5 text-xs">
+          <p>
+            <b className="text-emerald-700 dark:text-emerald-300">{formatNumber(j.withContact)}</b>{' '}
+            <span className="text-slate-500">contacts from {formatNumber(j.pageCount)} pages</span>
+          </p>
+          {j.adsSeen > 0 && (
+            <p className="text-[11px] text-slate-400">
+              {formatNumber(j.adsSeen)} ads collected{j.totalResults != null ? ` of ${formatNumber(j.totalResults)} on FB` : ''}
+            </p>
+          )}
+        </div>
       )}
       {j.projectId && stage !== 'waiting' && (
         <Link to={`/projects/${j.projectId}`} className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:underline dark:text-indigo-400">
@@ -246,9 +295,9 @@ function Board({ jobs, onStop, onRemove, admin }) {
   const pagesLeft = cols.reading.reduce((a, j) => a + (j.pending || 0), 0) + cols.collecting.reduce((a, j) => a + Math.max(0, j.pageCount - j.scraped), 0);
   const order = ['waiting', 'collecting', 'reading', 'done'];
   const hint = {
-    waiting: 'One search at a time, in this order',
-    collecting: 'Finding advertisers in the Ad Library',
-    reading: "Finding each advertiser's contact details",
+    waiting: 'Up to 2 searches run in parallel on the server, in this order',
+    collecting: 'Cloud engine scanning the Meta Ad Library in background',
+    reading: "Server reading each advertiser's page for phone, WhatsApp & email",
     done: 'Finished in the last 6 hours',
   };
   return (
@@ -387,11 +436,15 @@ export default function Searches() {
       if (r.created) {
         const ahead = (jobs || []).filter((j) => ['waiting', 'collecting'].includes(stageOf(j))).length;
         toast.success(`${r.created} search${r.created === 1 ? '' : 'es'} added`, {
-          description: ahead
-            ? `${ahead} search${ahead > 1 ? 'es are' : ' is'} ahead in the queue — yours start${r.created > 1 ? '' : 's'} after ${ahead > 1 ? 'them' : 'it'}, one at a time.`
-            : extensionHere()
-              ? 'The Ad Library opens in a few seconds — they run one after the other.'
-              : 'The extension picks them up within 30 seconds — they run one after the other.',
+          description: stats?.serverCollector
+            ? ahead
+              ? `${ahead} search${ahead > 1 ? 'es are' : ' is'} ahead in the queue — our cloud server runs up to 2 searches in parallel in the background.`
+              : 'Collecting in the background on the server right now — no browser tab needed.'
+            : ahead
+              ? `${ahead} search${ahead > 1 ? 'es are' : ' is'} ahead in the queue — yours start${r.created > 1 ? '' : 's'} after ${ahead > 1 ? 'them' : 'it'}, one at a time.`
+              : extensionHere()
+                ? 'The Ad Library opens in a few seconds — they run one after the other.'
+                : 'The extension picks them up within 30 seconds — they run one after the other.',
         });
       }
       await load();
@@ -448,7 +501,7 @@ export default function Searches() {
 
   return (
     <div>
-      <PageHeader icon={Search} title="Searches" subtitle="Add keywords — the extension collects the ads from the Ad Library, the server reads every page for contacts" />
+      <PageHeader icon={Search} title="Searches" subtitle="Add keywords — our cloud engine collects ads from the Meta Ad Library and reads every page for contacts automatically in the background" />
 
       {/* ---------- new searches ---------- */}
       <form onSubmit={submit} className="card relative overflow-hidden p-6">
@@ -523,8 +576,8 @@ export default function Searches() {
                 </p>
               )}
               {Number(maxAds) > 5000 && !fixedMax && (
-                <p className="mt-1.5 text-[11px] leading-snug text-amber-700 dark:text-amber-400">
-                  Above ~5,000 ads the Ad Library tab often freezes and the search ends early. Narrower keywords work better.
+                <p className="mt-1.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+                  Large searches (5,000+ ads) paginate through the Ad Library in the background using rotating proxies (~6–15 min).
                 </p>
               )}
             </div>
@@ -563,7 +616,12 @@ export default function Searches() {
         <AdFilters value={filters} onChange={setFilters} />
 
         <div className="relative mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-5 dark:border-white/10">
-          {stats?.extensionUpdate ? (
+          {stats?.serverCollector ? (
+            <p className="flex items-center gap-2 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" /><span className="relative h-2 w-2 rounded-full bg-emerald-500" /></span>
+              Cloud Background Engine active — searches &amp; page reading run automatically on the server (no browser tab needed)
+            </p>
+          ) : stats?.extensionUpdate ? (
             <p className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-rose-700 dark:text-rose-300">
               <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
               Your extension (v{stats.extensionUpdate.running}) is too old to run searches — they wait until it is updated to v{stats.extensionUpdate.min} or newer.
@@ -630,12 +688,14 @@ export default function Searches() {
         <p className="card px-4 py-8 text-center text-sm text-slate-500">No search matches.</p>
       ) : (
         <div className="card overflow-x-auto">
-          <table className="w-full min-w-[820px] text-sm">
+          <table className="w-full min-w-[920px] text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:border-white/10">
                 <th className="px-4 py-3">Keyword</th>
                 <th className="px-4 py-3">State</th>
-                <th className="px-4 py-3 text-right">Ads</th>
+                <th className="px-4 py-3 text-right">FB Results</th>
+                <th className="px-4 py-3 text-right">Collected</th>
+                <th className="px-4 py-3 text-right">Remaining</th>
                 <th className="px-4 py-3 text-right">Pages</th>
                 <th className="w-44 px-4 py-3">Read</th>
                 <th className="px-4 py-3 text-right">Contacts</th>
@@ -647,6 +707,10 @@ export default function Searches() {
               {history.map((j) => {
                 const st = stageOf(j);
                 const empty = st === 'stopped' && !j.adsSeen && !j.pageCount;
+                const collected = j.adsSeen || 0;
+                const totalOnFb = j.totalResults != null ? Math.max(j.totalResults, collected) : null;
+                const target = totalOnFb != null && totalOnFb > 0 ? Math.min(j.maxAds || 20000, totalOnFb) : (j.maxAds || 20000);
+                const remaining = totalOnFb != null ? Math.max(0, target - collected) : null;
                 return (
                   <tr key={j.id} className={cn('border-b border-slate-50 transition-colors last:border-0 hover:bg-slate-50/60 dark:border-white/5 dark:hover:bg-white/5', empty && 'opacity-60')}>
                     <td className="px-4 py-3">
@@ -666,11 +730,49 @@ export default function Searches() {
                     <td className="px-4 py-3 text-right tabular-nums">
                       {j.kind === 'links' ? (
                         <span className="text-slate-400">—</span>
+                      ) : totalOnFb != null ? (
+                        <>
+                          <span className="font-semibold text-slate-700 dark:text-slate-200">{formatNumber(totalOnFb)}</span>
+                          <div className="text-[11px] text-slate-400">on FB Ad Library</div>
+                        </>
+                      ) : st === 'collecting' ? (
+                        <span className="text-xs text-slate-400">Scanning…</span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {j.kind === 'links' ? (
+                        <span className="text-slate-400">—</span>
                       ) : (
                         <>
-                          {formatNumber(j.adsSeen)}
+                          <span className="font-semibold text-indigo-700 dark:text-indigo-300">{formatNumber(collected)}</span>
                           <div className="text-[11px] text-slate-400">max {formatNumber(j.maxAds)}</div>
                         </>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {j.kind === 'links' ? (
+                        <span className="text-slate-400">—</span>
+                      ) : st === 'collecting' ? (
+                        remaining != null ? (
+                          <>
+                            <span className="font-semibold text-amber-600 dark:text-amber-400">{formatNumber(remaining)}</span>
+                            <div className="text-[11px] text-slate-400">{pct(collected, target)}% done</div>
+                          </>
+                        ) : (
+                          <span className="text-xs text-slate-400">…</span>
+                        )
+                      ) : st === 'waiting' ? (
+                        <span className="text-xs text-slate-400">up to {formatNumber(j.maxAds)}</span>
+                      ) : st === 'stopped' ? (
+                        remaining != null && remaining > 0 ? (
+                          <span className="text-xs text-rose-500">{formatNumber(remaining)} skipped</span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )
+                      ) : (
+                        <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">0 left</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">

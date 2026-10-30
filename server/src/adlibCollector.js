@@ -52,6 +52,8 @@ export function adlibProxyPool(s) {
 
 /** True when the server collects Ad Library searches in the background without Chrome. */
 export const serverCollects = (s) => s?.running !== false && s?.serverCollector === true && adlibProxyPool(s).length > 0;
+export const serverCollectorLanes = () => MAX_CONCURRENT_JOBS;
+export const serverCollectorActiveCount = () => activeJobs.size;
 
 let rrIndex = 0;
 function nextProxyFrom(pool, preferGroup = 'rotating') {
@@ -155,9 +157,14 @@ function extractFromJson(o, adsMap, state, searchQ, depth = 0) {
     return;
   }
   const c = o.search_results_connection;
-  if (c && c.page_info && 'end_cursor' in c.page_info) {
-    state.cursor = c.page_info.end_cursor;
-    state.hasNext = Boolean(c.page_info.has_next_page);
+  if (c) {
+    if (typeof c.count === 'number' && c.count >= 0) {
+      state.totalResults = Math.max(state.totalResults ?? 0, c.count);
+    }
+    if (c.page_info && 'end_cursor' in c.page_info) {
+      state.cursor = c.page_info.end_cursor;
+      state.hasNext = Boolean(c.page_info.has_next_page);
+    }
   }
   if (o.ad_archive_id && (o.page_id || o.snapshot)) {
     const id = String(o.ad_archive_id);
@@ -393,8 +400,13 @@ function filterMatchingAds(allAds, maxAds, minAds) {
 }
 
 /** Flush newly collected ads to MongoDB (`ingestAds`) and update job progress. */
-async function flushJobAds(job, adsToFlush) {
-  if (!adsToFlush.length) return { stopped: false };
+async function flushJobAds(job, adsToFlush, extraSet = {}) {
+  if (!adsToFlush.length) {
+    if (Object.keys(extraSet).length) {
+      await col('jobs').updateOne({ _id: job._id }, { $set: { lastActivity: new Date(), stuckNote: '', ...extraSet } });
+    }
+    return { stopped: false };
+  }
   const freshJob = await col('jobs').findOne({ _id: job._id }, { projection: { phase: 1 } });
   if (!freshJob || freshJob.phase === 'stopped') return { stopped: true };
 
@@ -407,7 +419,7 @@ async function flushJobAds(job, adsToFlush) {
     const pageIds = uniq(chunk.map((a) => a && a.pageId));
     await col('jobs').updateOne(
       { _id: job._id },
-      { $inc: { adsSeen: out.ads }, $addToSet: { pageIds: { $each: pageIds } }, $set: { lastActivity: new Date(), stuckNote: '' } },
+      { $inc: { adsSeen: out.ads }, $addToSet: { pageIds: { $each: pageIds } }, $set: { lastActivity: new Date(), stuckNote: '', ...extraSet } },
     );
   }
   return { stopped: false };
@@ -429,7 +441,7 @@ export async function runServerCollectJob(job) {
     const searchQ = String(job.keyword || '').trim().toLowerCase();
     const adsMap = new Map();
     const sentAdIds = new Set();
-    const state = { cursor: null, hasNext: false };
+    const state = { cursor: null, hasNext: false, totalResults: job.totalResults ?? null };
 
     let sess;
     try {
@@ -451,24 +463,60 @@ export async function runServerCollectJob(job) {
         /* ignore non-JSON script */
       }
     }
-
-    const baseVars = sess.vars;
-
-    // Flush initial HTML ads immediately when minAds <= 1 so the user sees instant results
-    if (minAds <= 1 && adsMap.size > 0) {
-      const batch = [...adsMap.values()].slice(0, maxAds);
-      batch.forEach((a) => sentAdIds.add(a.adId));
-      const { stopped } = await flushJobAds(job, batch);
-      if (stopped) return;
-    } else {
-      await col('jobs').updateOne({ _id: job._id }, { $set: { lastActivity: new Date(), stuckNote: '' } });
+    if (state.totalResults == null) {
+      const cm = sess.html.match(/"search_results_connection":\{"count":(\d+)/);
+      if (cm) state.totalResults = Number(cm[1]);
+    }
+    if (!state.hasNext && state.totalResults == null) {
+      state.totalResults = adsMap.size;
     }
 
-    let pageCount = 1;
+    const baseVars = sess.vars;
+    const resuming = minAds <= 1 && job.adsSeen > 0 && Boolean(job.collectCursor);
+    let alreadyFlushedCount = 0;
+
+    if (resuming) {
+      // Resume directly from the saved cursor after a server restart without re-counting initial ads
+      alreadyFlushedCount = Number(job.adsSeen) || 0;
+      for (const id of adsMap.keys()) sentAdIds.add(id);
+      state.cursor = job.collectCursor;
+      state.hasNext = true;
+      await col('jobs').updateOne(
+        { _id: job._id },
+        {
+          $set: {
+            lastActivity: new Date(),
+            stuckNote: '',
+            ...(state.totalResults != null ? { totalResults: Math.max(state.totalResults, alreadyFlushedCount) } : {}),
+          },
+        },
+      );
+    } else {
+      // Starting fresh from page 1: ensure adsSeen is 0 if a previous pre-cursor run was interrupted
+      if (job.adsSeen > 0) {
+        await col('jobs').updateOne({ _id: job._id }, { $set: { adsSeen: 0 } });
+      }
+      const metaSet = {
+        collectCursor: state.cursor || null,
+        pagesFetched: 1,
+        ...(state.totalResults != null ? { totalResults: Math.max(state.totalResults, adsMap.size) } : {}),
+      };
+      if (minAds <= 1 && adsMap.size > 0) {
+        const batch = [...adsMap.values()].slice(0, maxAds);
+        batch.forEach((a) => sentAdIds.add(a.adId));
+        const { stopped } = await flushJobAds(job, batch, metaSet);
+        if (stopped) return;
+      } else {
+        await col('jobs').updateOne({ _id: job._id }, { $set: { lastActivity: new Date(), stuckNote: '', ...metaSet } });
+      }
+    }
+
+    let pageCount = Number(job.pagesFetched) > 1 && resuming ? Number(job.pagesFetched) : 1;
     let emptyPages = 0;
     let consecutiveFailures = 0;
+    const totalCollectedSoFar = () => (resuming ? alreadyFlushedCount + Math.max(0, sentAdIds.size - adsMap.size) : adsMap.size);
 
-    while (state.hasNext && state.cursor && adsMap.size < maxAds) {
+    while (state.hasNext && state.cursor && (resuming ? alreadyFlushedCount + sentAdIds.size < maxAds : adsMap.size < maxAds)) {
       const check = await col('jobs').findOne({ _id: job._id }, { projection: { phase: 1 } });
       if (!check || check.phase === 'stopped') return;
 
@@ -517,17 +565,34 @@ export async function runServerCollectJob(job) {
         if (emptyPages >= 10) break;
       }
 
+      const currentCount = resuming ? alreadyFlushedCount + [...adsMap.keys()].filter((k) => !sentAdIds.has(k)).length : adsMap.size;
+      const metaSet = {
+        collectCursor: state.cursor || null,
+        pagesFetched: pageCount,
+        ...(state.totalResults != null ? { totalResults: Math.max(state.totalResults, currentCount) } : {}),
+      };
+
       if (minAds <= 1) {
-        const unsent = [...adsMap.values()].filter((a) => !sentAdIds.has(a.adId)).slice(0, Math.max(0, maxAds - sentAdIds.size));
+        const capLeft = Math.max(0, maxAds - (resuming ? alreadyFlushedCount : sentAdIds.size));
+        const unsent = [...adsMap.values()].filter((a) => !sentAdIds.has(a.adId)).slice(0, capLeft);
         if (unsent.length) {
           unsent.forEach((a) => sentAdIds.add(a.adId));
-          const { stopped } = await flushJobAds(job, unsent);
+          if (resuming) alreadyFlushedCount += unsent.length;
+          const { stopped } = await flushJobAds(job, unsent, metaSet);
           if (stopped) return;
+        } else {
+          await col('jobs').updateOne({ _id: job._id }, { $set: { lastActivity: new Date(), ...metaSet } });
         }
       } else {
         await col('jobs').updateOne(
           { _id: job._id },
-          { $set: { lastActivity: new Date(), stuckNote: `Collecting in background… ${adsMap.size} ads scanned (filtering ${minAds}+ ads at the end)` } },
+          {
+            $set: {
+              lastActivity: new Date(),
+              ...metaSet,
+              stuckNote: `Collecting in background… ${adsMap.size} ads scanned (filtering ${minAds}+ ads at the end)`,
+            },
+          },
         );
       }
 
@@ -540,16 +605,27 @@ export async function runServerCollectJob(job) {
     const matched = filterMatchingAds(allCaptured, maxAds, minAds);
     const remaining = matched.ads.filter((a) => !sentAdIds.has(a.adId));
     if (remaining.length) {
-      const { stopped } = await flushJobAds(job, remaining);
+      const { stopped } = await flushJobAds(job, remaining, { pagesFetched: pageCount });
       if (stopped) return;
     }
+
+    const finalCount = resuming ? alreadyFlushedCount : allCaptured.length;
+    const finalTotalResults =
+      state.totalResults != null
+        ? Math.max(state.totalResults, finalCount)
+        : !state.hasNext || finalCount < maxAds
+          ? finalCount
+          : null;
 
     const doneSet = {
       phase: 'collected',
       collectedAt: new Date(),
       note: 'done',
       stuckNote: '',
-      captured: allCaptured.length,
+      collectCursor: null,
+      pagesFetched: pageCount,
+      captured: finalCount,
+      ...(finalTotalResults != null ? { totalResults: finalTotalResults } : {}),
       pagesTotal: matched.pagesTotal,
       pagesMatched: matched.pagesMatched,
       minAds,

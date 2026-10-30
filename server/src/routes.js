@@ -20,14 +20,38 @@ import { listInbox, markRead, unreadCount } from './inbox.js';
 import { getSmtp, parseRecipients, prefsOf, saveSmtp, sendTest, smtpPublic, smtpReady, vapidKeys } from './notify.js';
 import { MIN_COLLECT_VERSION, canCollect, serverReads } from './worker.js';
 import { serverReaderLanes, serverReaderNow } from './serverReader.js';
-import { kickAdlibCollector } from './adlibCollector.js';
+import { kickAdlibCollector, serverCollects } from './adlibCollector.js';
 import { engineHealth } from './health.js';
 import { adLibraryUrl, cleanAdFilters, cleanEmails, startOfToday, uniq, uniqPhones } from './util.js';
 
 const r = express.Router();
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).then((out) => out !== undefined && !res.headersSent && res.json(out)).catch(next);
 
-const jobDTO = (j) => ({ ...j, id: String(j._id), _id: undefined, workspaceId: undefined, userId: undefined, pageIds: undefined, pageCount: (j.pageIds || []).length });
+const computeJobVisibility = (j = {}) => {
+  const adsSeen = j.adsSeen || 0;
+  const maxAds = j.maxAds || 20000;
+  const rawTotal =
+    j.totalResults != null
+      ? Math.max(j.totalResults, adsSeen)
+      : j.phase === 'collected' && adsSeen > 0 && adsSeen < maxAds
+        ? j.captured || adsSeen
+        : null;
+  const targetAds = rawTotal != null && rawTotal > 0 ? Math.min(maxAds, rawTotal) : maxAds;
+  const remainingAds = j.phase === 'collecting' ? Math.max(0, targetAds - adsSeen) : 0;
+  return { totalResults: rawTotal, targetAds, remainingAds };
+};
+
+const jobDTO = (j) => ({
+  ...j,
+  id: String(j._id),
+  _id: undefined,
+  workspaceId: undefined,
+  userId: undefined,
+  pageIds: undefined,
+  collectCursor: undefined,
+  pageCount: (j.pageIds || []).length,
+  ...computeJobVisibility(j),
+});
 const withContact = { $or: [{ 'emails.0': { $exists: true } }, { 'phones.0': { $exists: true } }, { 'whatsapp.0': { $exists: true } }] };
 const visitsToday = () => col('pages').countDocuments({ lastAttemptAt: { $gte: startOfToday() } });
 /** When the worker is taking a break after a Facebook login wall: the time it continues, else null. */
@@ -169,14 +193,16 @@ r.get('/stats', ah(async (req) => {
   const latestPcs = await col('pcs').find({ ...pcOwner, lastSeen: { $gt: new Date(Date.now() - 5 * 60e3) } }).project({ version: 1, waitWhy: 1, waitUntil: 1, takeQueue: 1 }).toArray();
   // the computer that runs this account's searches is taking a break (worker.js: gap between searches / rest)
   const waiting = latestPcs.find((p) => p.takeQueue !== false && p.waitWhy && p.waitUntil && new Date(p.waitUntil) > new Date());
-  const updateNeeded = latestPcs.length > 0 && !latestPcs.some((p) => canCollect(p.version));
+  const srvCollect = serverCollects(settings);
+  const updateNeeded = !srvCollect && latestPcs.length > 0 && !latestPcs.some((p) => canCollect(p.version));
   // a customer's own computer on an older extension than the latest (it still works) — their own reminder
   const myOld = admin ? [] : latestPcs.filter((p) => isOutdated(p.version));
   return {
     total, withEmail, withPhone, pending, failed, scrapedToday, contacted, queuedJobs, collecting, active, activeName,
+    serverCollector: srvCollect,
     worker: admin ? await workerInfo(ws) : myPc ? { version: myPc.version, seenAgo: Math.round((Date.now() - new Date(myPc.lastSeen).getTime()) / 1000), mine: true } : null,
     account: await accountOf(ws),
-    queueWait: waiting ? { why: waiting.waitWhy, until: waiting.waitUntil } : null,
+    queueWait: !srvCollect && waiting ? { why: waiting.waitWhy, until: waiting.waitUntil } : null,
     extensionUpdate: updateNeeded ? { min: MIN_COLLECT_VERSION, running: [...new Set(latestPcs.map((p) => p.version))].join(', ') } : null,
     extensionOld: myOld.length ? { running: [...new Set(myOld.map((p) => p.version))].join(', '), latest: workerState.latest } : null,
     inboxUnread: await unreadCount(req.user), // the bell's red number
@@ -364,6 +390,7 @@ r.get('/jobs', ah(async (req) => {
       ...jobDTO(j), projectId: j.projectId ? String(j.projectId) : null, scraped: c.scraped || 0, withContact: c.withContact || 0, pending: c.pending || 0,
       // which computer collected it: for the team only (a customer sees what was found, not where)
       pc: isAdmin(req) && j.collector ? (j.collector === 'server' ? 'Server (Background)' : names.get(j.collector) || null) : null,
+      serverBackground: j.collector === 'server',
       ...(isAdmin(req) ? {} : { stuckNote: j.stuckNote ? 'stuck' : '', collector: undefined }),
     };
   });
@@ -475,7 +502,10 @@ r.post('/jobs/:id/requeue', ah(async (req) => {
   if (['queued', 'collecting'].includes(j.phase)) throw httpError(409, 'This search is already running');
   if (j.kind === 'links') throw httpError(400, 'This was made from pasted links — use Re-scrape on its leads, or paste the links again');
   await checkSearchQuota(req, 1);
-  await col('jobs').updateOne({ _id: j._id }, { $set: { phase: 'queued', createdAt: new Date(), adsSeen: 0 }, $unset: { collectedAt: '', stoppedAt: '', note: '', notifiedAt: '' } });
+  await col('jobs').updateOne(
+    { _id: j._id },
+    { $set: { phase: 'queued', createdAt: new Date(), adsSeen: 0 }, $unset: { collectedAt: '', stoppedAt: '', note: '', notifiedAt: '', collectCursor: '', totalResults: '', pagesFetched: '' } },
+  );
   kickAdlibCollector().catch(() => {});
   return { ok: true };
 }));
@@ -594,9 +624,12 @@ r.get('/pipeline', ah(async (req) => {
       col('ads').countDocuments({ projectIds: p._id }),
       col('jobs').findOne({ projectId: p._id }, { sort: { createdAt: -1 } }),
     ]);
+    const vis = computeJobVisibility(lastJob || {});
     focus = {
       id: String(p._id), name: p.name, country: p.country, leads, pending, failed, withContact: contact, ads,
       jobPhase: lastJob?.phase || 'collected', jobAds: lastJob?.adsSeen || 0, maxAds: lastJob?.maxAds || s.maxAds,
+      totalResults: vis.totalResults, targetAds: vis.targetAds, remainingAds: vis.remainingAds,
+      serverBackground: lastJob?.collector === 'server',
       queuedAt: lastJob?.createdAt, startedAt: lastJob?.startedAt, collectedAt: lastJob?.collectedAt,
     };
   }
@@ -671,14 +704,16 @@ r.get('/pipeline', ah(async (req) => {
     const myOldPcs = await col('pcs').find({ workspaceId: ws, lastSeen: { $gte: new Date(Date.now() - 5 * 60e3) } }).project({ version: 1 }).toArray();
     const oldVersions = [...new Set(myOldPcs.filter((p) => isOutdated(p.version)).map((p) => p.version))];
     if (oldVersions.length) customerHealth.push({ level: 'warn', key: 'extension-old', title: `Your Chrome extension is out of date (${oldVersions.join(', ')})`, detail: `The latest is ${workerState.latest}. It still works, but update it to get the latest fixes.`, fix: 'Connect extension page → download the new ZIP → put it in the same folder → chrome://extensions → Reload' });
-    if ((queuedJobs.length || collecting) && !myPcs.length) customerHealth.push({ level: 'warn', key: 'no-extension', title: 'Your Chrome extension is not connected', detail: 'Your searches run in your own Chrome — they wait until the extension is installed and connected.', fix: 'Settings → Extension → connect' });
+    if ((queuedJobs.length || collecting) && !myPcs.length && !serverCollects(s)) customerHealth.push({ level: 'warn', key: 'no-extension', title: 'Your Chrome extension is not connected', detail: 'Your searches run in your own Chrome — they wait until the extension is installed and connected.', fix: 'Settings → Extension → connect' });
   }
+  const collectVis = collecting ? computeJobVisibility(collecting) : null;
   return {
     server: admin ? server : null,
+    serverCollector: serverCollects(s),
     live: admin ? live : { ...live, lanes: [] },
     health: admin ? await engineHealth(s, ws) : customerHealth,
     account,
-    extensionConnected: admin ? true : myPcs.length > 0,
+    extensionConnected: admin ? true : serverCollects(s) || myPcs.length > 0,
     running: s.running,
     pausedReason: s.pausedReason,
     cooldownUntil: activeCooldown(s),
@@ -686,8 +721,11 @@ r.get('/pipeline', ah(async (req) => {
     collecting: collecting
       ? {
           keyword: collecting.keyword, ads: collecting.adsSeen || 0, pages: (collecting.pageIds || []).length, maxAds: collecting.maxAds,
+          totalResults: collectVis.totalResults, targetAds: collectVis.targetAds, remainingAds: collectVis.remainingAds,
+          pagesFetched: collecting.pagesFetched || 1,
+          serverBackground: collecting.collector === 'server',
           silentSec: Math.round((Date.now() - new Date(collecting.lastActivity || collecting.startedAt || Date.now()).getTime()) / 1000),
-          pc: isAdmin(req) && collecting.collector ? pcName(await getPc(collecting.collector)) : null,
+          pc: isAdmin(req) && collecting.collector ? (collecting.collector === 'server' ? 'Server (Background)' : pcName(await getPc(collecting.collector))) : null,
           tabHidden: !!collecting.tabHidden,
         }
       : null,

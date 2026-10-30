@@ -25,18 +25,25 @@ export function PipelineSteps({ data, simple = false }) {
     {
       icon: Search,
       title: simple ? 'Finding advertisers' : 'Ads from the Ad Library',
-      text: f.jobPhase === 'queued' ? 'Waiting…' : `${formatNumber(f.ads)} ads · ${formatNumber(f.leads)} pages`,
+      text:
+        f.jobPhase === 'queued'
+          ? 'Waiting…'
+          : f.totalResults != null
+            ? `${formatNumber(f.ads)} collected of ${formatNumber(f.totalResults)} on FB · ${formatNumber(f.leads)} pages`
+            : `${formatNumber(f.ads)} ads · ${formatNumber(f.leads)} pages`,
       state: f.jobPhase === 'queued' ? 'todo' : f.jobPhase === 'collecting' ? 'active' : 'done',
-      progress: f.jobPhase === 'collecting' ? (f.jobAds / Math.max(1, f.maxAds)) * 100 : null,
+      progress: f.jobPhase === 'collecting' ? (f.jobAds / Math.max(1, f.targetAds || f.maxAds)) * 100 : null,
       live:
         f.jobPhase === 'collecting' && data.collecting
-          ? data.collecting.silentSec >= 60
+          ? data.collecting.silentSec >= 60 && !data.collecting.serverBackground
             ? simple
               ? 'Waiting — keep the Ad Library tab open in Chrome'
               : `Tab not responding (${Math.round(data.collecting.silentSec)} s)`
-            : simple
-              ? `Searching… ${formatNumber(data.collecting.ads)} ads found`
-              : `Scrolling — ${data.collecting.ads}/${data.collecting.maxAds} ads (max)`
+            : data.collecting.totalResults != null
+              ? `${formatNumber(data.collecting.ads)} / ${formatNumber(data.collecting.targetAds || data.collecting.totalResults)} ads (${formatNumber(data.collecting.remainingAds ?? 0)} left)`
+              : simple
+                ? `Searching in background… ${formatNumber(data.collecting.ads)} ads found`
+                : `Collecting in background — ${formatNumber(data.collecting.ads)}/${formatNumber(data.collecting.maxAds)} ads`
           : null,
     },
     {
@@ -228,9 +235,19 @@ export function LiveBoard({ data, updatedAt }) {
               <li className="flex items-center gap-2.5 rounded-xl bg-indigo-50 px-3 py-2 text-sm dark:bg-indigo-500/10">
                 <Search className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden="true" />
                 <span className="min-w-0 flex-1 truncate">
-                  Ad Library: <b>“{c.keyword}”</b> — {c.ads}/{c.maxAds} ads · {c.pages} pages{c.pc && <span className="text-indigo-600 dark:text-indigo-300"> · on {c.pc}</span>}
+                  Ad Library: <b>“{c.keyword}”</b> —{' '}
+                  {c.totalResults != null ? (
+                    <>
+                      <b>{formatNumber(c.ads)}</b> collected of <b>{formatNumber(c.totalResults)}</b> on FB (<b>{formatNumber(c.remainingAds ?? 0)}</b> left)
+                    </>
+                  ) : (
+                    <>
+                      {formatNumber(c.ads)}/{formatNumber(c.maxAds)} ads
+                    </>
+                  )}{' '}
+                  · {formatNumber(c.pages)} pages{c.pc && <span className="text-indigo-600 dark:text-indigo-300"> · on {c.pc}</span>}
                 </span>
-                {c.silentSec >= 60 ? (
+                {c.silentSec >= 60 && !c.serverBackground ? (
                   <span className={cn(chip, 'bg-amber-100 text-amber-800')}>not responding</span>
                 ) : (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-indigo-500" aria-hidden="true" />
@@ -416,14 +433,20 @@ export function NowLine({ data, simple = false }) {
     const why = data.cooldownReason && !/login/i.test(data.cooldownReason) ? data.cooldownReason : 'Facebook asked for a login';
     text = `${why}, so the worker is taking a break — it continues by itself at ${hhmm(data.cooldownUntil)}. Nothing to do.`;
     tone = 'amber';
-  } else if (data.collecting && data.collecting.silentSec >= 60) {
+  } else if (data.collecting && data.collecting.silentSec >= 60 && !data.collecting.serverBackground) {
     text = `The Ad Library tab for "${data.collecting.keyword}" is not responding — ${data.collecting.ads} ads, ${data.collecting.pages} pages arrived. Reload that tab to continue.`;
     tone = 'amber';
-  } else if (data.collecting && data.collecting.tabHidden) {
+  } else if (data.collecting && data.collecting.tabHidden && !data.collecting.serverBackground) {
     text = `"${data.collecting.keyword}" is waiting: the Ad Library tab${data.collecting.pc ? ` on ${data.collecting.pc}` : ''} is in the background. Bring it to the front — Facebook only loads more ads while it is visible (${data.collecting.ads} so far).`;
     tone = 'amber';
-  } else if (data.collecting)
-    text = `Collecting ads for "${data.collecting.keyword}" in the Ad Library${data.collecting.pc ? ` on ${data.collecting.pc}` : ''} — ${data.collecting.ads} of max ${data.collecting.maxAds} ads, ${data.collecting.pages} pages so far`;
+  } else if (data.collecting) {
+    const c = data.collecting;
+    const progressPart =
+      c.totalResults != null
+        ? `${formatNumber(c.ads)} collected of ${formatNumber(c.totalResults)} FB results (${formatNumber(c.remainingAds ?? 0)} remaining)`
+        : `${formatNumber(c.ads)} of max ${formatNumber(c.maxAds)} ads`;
+    text = `Collecting ads for "${c.keyword}" in the Ad Library${c.pc ? ` on ${c.pc}` : ' in background'} — ${progressPart} · ${formatNumber(c.pages)} pages found so far`;
+  }
   else if (sv) ({ text, tone } = sv);
   else if (data.working) text = `Reading the page "${data.working.name}"`;
   else if (data.pendingAll && data.doneToday >= data.dailyLimit) {
@@ -485,11 +508,14 @@ function SimpleNowLine({ data }) {
   if (noCredits && data.pendingAll && !c) {
     text = `${data.pendingAll} advertiser${data.pendingAll > 1 ? 's are' : ' is'} waiting for credits — their contacts are found as soon as you add credits (1 credit = 1 advertiser).`;
     tone = 'amber';
-  } else if (c && (c.silentSec >= 60 || c.tabHidden)) {
+  } else if (c && (c.silentSec >= 60 || c.tabHidden) && !c.serverBackground) {
     text = `"${c.keyword}" is waiting — keep the Ad Library tab open in your Chrome (${formatNumber(c.ads)} ads found so far).`;
     tone = 'amber';
   } else if (c) {
-    text = `Searching "${c.keyword}" — ${formatNumber(c.ads)} ads from ${formatNumber(c.pages)} advertisers found so far`;
+    text =
+      c.totalResults != null
+        ? `Searching "${c.keyword}" in background — ${formatNumber(c.ads)} collected of ${formatNumber(c.totalResults)} FB ads (${formatNumber(c.remainingAds ?? 0)} left) · ${formatNumber(c.pages)} advertisers found`
+        : `Searching "${c.keyword}" in background — ${formatNumber(c.ads)} ads from ${formatNumber(c.pages)} advertisers found so far`;
   } else if (data.pendingAll) {
     text = `Finding contact details — ${formatNumber(data.pendingAll)} advertiser${data.pendingAll > 1 ? 's' : ''} left${data.etaMinutes > 0 ? ` (about ${data.etaMinutes} min)` : ''}`;
   } else if (data.queued.length) {

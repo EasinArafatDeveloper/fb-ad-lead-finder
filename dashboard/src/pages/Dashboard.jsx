@@ -24,7 +24,7 @@ export default function Dashboard() {
   const [params, setParams] = useSearchParams();
   // after sign-up / after the email link
   useEffect(() => {
-    if (params.get('welcome')) toast.success('Welcome! Your free credits are ready', { description: 'Confirm your email (link in your inbox), connect the extension, and start a search.' });
+    if (params.get('welcome')) toast.success('Welcome! Your free credits are ready', { description: 'Confirm your email (link in your inbox) and start your first keyword search.' });
     if (params.get('verified')) {
       toast.success('Email confirmed — you can start searching');
       refreshMe?.();
@@ -95,11 +95,18 @@ export default function Dashboard() {
             <p className="text-sm text-white/80">You have {pipe.account?.unlimited ? 'unlimited' : formatNumber(pipe.account?.credits || 0)} credits — 1 credit = 1 Facebook Page read.</p>
           </div>
           <ol className="grid gap-px bg-slate-100 sm:grid-cols-3 dark:bg-white/10">
-            {[
-              [me?.user.emailVerified !== false, 'Confirm your email', 'Click the link we sent you.', null],
-              [pipe.extensionConnected, 'Connect the Chrome extension', 'Your searches run in your own Chrome.', '/connect-extension'],
-              [stats?.total > 0, 'Start a search', 'Type a keyword, pick a country.', '/search?new=1'],
-            ].map(([done, title, text, to], i) => (
+            {(pipe.serverCollector
+              ? [
+                  [me?.user.emailVerified !== false, 'Confirm your email', 'Click the link we sent to your inbox.', null],
+                  [stats?.total > 0 || !!pipe.collecting || (pipe.queued?.length || 0) > 0, 'Start a keyword search', 'Type a keyword and pick a country — our cloud server collects the ads in the background.', '/search?new=1'],
+                  [stats?.withPhone > 0 || stats?.withEmail > 0, 'Export verified leads', 'Filter by phone, WhatsApp, or email and export to Excel, CSV, or Google Sheets.', '/leads'],
+                ]
+              : [
+                  [me?.user.emailVerified !== false, 'Confirm your email', 'Click the link we sent you.', null],
+                  [pipe.extensionConnected, 'Connect the Chrome extension', 'Your searches run in your own Chrome.', '/connect-extension'],
+                  [stats?.total > 0, 'Start a search', 'Type a keyword, pick a country.', '/search?new=1'],
+                ]
+            ).map(([done, title, text, to], i) => (
               <li key={title} className="bg-white p-5 dark:bg-slate-900">
                 <div className="flex items-center gap-2">
                   <span className={cn('flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold', done ? 'bg-emerald-500 text-white' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200')}>
@@ -110,7 +117,7 @@ export default function Dashboard() {
                 <p className="mt-1.5 text-sm text-slate-500">{text}</p>
                 {!done && to && (
                   <Link to={to} className="mt-3 inline-flex items-center gap-1 text-sm font-bold text-indigo-600 hover:underline dark:text-indigo-400">
-                    {i === 1 ? 'Connect now' : 'Start'} <ArrowRight className="h-4 w-4" />
+                    {!pipe.serverCollector && i === 1 ? 'Connect now' : 'Start'} <ArrowRight className="h-4 w-4" />
                   </Link>
                 )}
               </li>

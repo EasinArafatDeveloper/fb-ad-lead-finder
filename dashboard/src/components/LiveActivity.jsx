@@ -25,7 +25,9 @@ function Mode({ pc }) {
 }
 
 function Collecting({ j }) {
-  const silent = j.silentSec != null && j.silentSec > 60;
+  const isServer = j.pc?.version === 'cloud' || j.pc?.version === 'server';
+  const silent = !isServer && j.silentSec != null && j.silentSec > 60;
+  const target = j.targetAds || j.maxAds || 20000;
   return (
     <div className={cn('rounded-xl border p-3', silent ? 'border-amber-300 bg-amber-50/60 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-indigo-200 bg-indigo-50/40 dark:border-indigo-500/30 dark:bg-indigo-500/10')}>
       <div className="flex flex-wrap items-center gap-2">
@@ -37,14 +39,19 @@ function Collecting({ j }) {
         <span className="text-xs text-slate-500">{j.country}{j.manual ? ' · from the Ad Library panel' : ''} · started {timeAgo(j.startedAt)}</span>
         <Mode pc={j.pc} />
       </div>
-      <div className="mt-2 flex items-baseline justify-between text-xs">
-        <span className="font-semibold text-indigo-700 dark:text-indigo-300">{formatNumber(j.ads)} ads · {formatNumber(j.pages)} pages found</span>
-        {j.maxAds && <span className="text-slate-500">max {formatNumber(j.maxAds)}</span>}
+      <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2 text-xs">
+        <span className="font-semibold text-indigo-700 dark:text-indigo-300">
+          {formatNumber(j.ads)} ads collected
+          {j.totalResults != null ? ` of ${formatNumber(j.totalResults)} on FB (${formatNumber(j.remainingAds ?? 0)} left)` : ''}
+          {' · '}
+          {formatNumber(j.pages)} pages found
+        </span>
+        {j.maxAds && <span className="text-slate-500">{pct(j.ads, target)}% · max {formatNumber(j.maxAds)}</span>}
       </div>
-      <div className="mt-1"><Progress value={pct(j.ads, j.maxAds)} /></div>
+      <div className="mt-1"><Progress value={pct(j.ads, target)} /></div>
       <p className="mt-1.5 text-[11px] text-slate-500">
         Pages read {formatNumber(j.read)}/{formatNumber(j.pages)} · {formatNumber(j.withContact)} with a contact
-        {j.silentSec != null && ` · last word from the tab ${j.silentSec} s ago`}
+        {j.silentSec != null && ` · last update ${j.silentSec} s ago`}
       </p>
       {(silent || j.tabHidden || j.note) && (
         <p className="mt-1.5 flex items-start gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
@@ -198,6 +205,11 @@ export default function LiveActivity() {
             <span className="rounded-full bg-slate-100 px-2.5 py-1 dark:bg-white/10"><b className="tabular-nums">{formatNumber(d.engine.pagesLast5min)}</b> in 5 min</span>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 dark:bg-white/10"><b className="tabular-nums">{formatNumber(d.engine.queue)}</b> pages in the queue</span>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 dark:bg-white/10"><b className="tabular-nums">{d.engine.readingNow.length}</b> being read now</span>
+            {d.engine.serverCollector && (
+              <span className="rounded-full bg-indigo-100 px-2.5 py-1 font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                <b className="tabular-nums">{d.engine.serverCollectingNow || 0}/{d.engine.serverCollectorLanes || 2}</b> server Ad Library collectors
+              </span>
+            )}
             <span className="rounded-full bg-slate-100 px-2.5 py-1 dark:bg-white/10"><MousePointerClick className="mr-1 inline h-3 w-3" /><b className="tabular-nums">{d.engine.computersOnline}</b> computers online</span>
           </div>
           {d.engine.readingNow.length > 0 && (
