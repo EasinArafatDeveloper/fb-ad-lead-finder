@@ -13,6 +13,7 @@ import { useStats } from '../components/Layout';
 import NotifyPanel from '../components/NotifyPanel';
 import PcsCard from '../components/PcsCard';
 import ExtensionPanel from '../components/ExtensionPanel';
+import FbAccountCard from '../components/FbAccountCard';
 import { LockedFeature, usePerk } from '../components/PlanGate';
 
 // ---------------- building blocks ----------------
@@ -503,6 +504,10 @@ export default function Settings() {
                   <IpHealth status={proxyStatus} />
                 </Card>
               )}
+
+              <Card icon={ShieldCheck} title="Facebook account (for comments)" text="Your own Facebook account — used only to read comments, replies and reactions of posts, videos and reels">
+                <FbAccountCard />
+              </Card>
 
               <Card icon={Server} title="Reading & collecting on the server" text="The server collects Ad Library searches and reads pages in the background through your proxy pool — no Chrome needed">
                 <div className="divide-y divide-slate-100 dark:divide-white/10">

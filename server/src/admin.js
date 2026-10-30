@@ -12,6 +12,7 @@ import { deleteWorkspaceData, oid } from './projects.js';
 import { startOfToday } from './util.js';
 import { OUTDATED_LIST_DAYS, isOutdated, outdatedExtensions, worker as workerState } from './worker-state.js';
 import liveRoutes from './adminLive.js';
+import { fbAccountPublic, openFbSession, removeFbAccount, saveFbCookies } from './fbAccount.js';
 
 const r = express.Router();
 // Live: what every account is doing now, and one account's projects / leads (read-only) — adminLive.js
@@ -383,5 +384,14 @@ r.post('/test-proxy', ah(async (req) => {
     r.end();
   });
 }));
+
+// ---------------- the team's Facebook account (only for reading post / video / reel comments) ----------------
+r.get('/fb-account', ah(() => fbAccountPublic()));
+r.put('/fb-account', ah(async (req) => saveFbCookies(req.body?.cookies)));
+r.post('/fb-account/check', ah(async () => {
+  await openFbSession();
+  return fbAccountPublic();
+}));
+r.delete('/fb-account', ah(() => removeFbAccount()));
 
 export default r;
