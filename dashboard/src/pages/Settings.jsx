@@ -504,14 +504,21 @@ export default function Settings() {
                 </Card>
               )}
 
-              <Card icon={Server} title="Reading on the server" text="The server reads several pages at once, each through its own IP — no Chrome needed">
+              <Card icon={Server} title="Reading & collecting on the server" text="The server collects Ad Library searches and reads pages in the background through your proxy pool — no Chrome needed">
                 <div className="divide-y divide-slate-100 dark:divide-white/10">
+                  <Toggle
+                    id="sc"
+                    checked={Boolean(k.serverCollector)}
+                    onChange={setK('serverCollector')}
+                    label="Collect Ad Library searches on the server (background)"
+                    help="Collects ads directly on the server rotating across your Rotating/Static proxy pool — no Chrome tab needed, no tab freezes or single-IP rate limits."
+                  />
                   <Toggle
                     id="sr"
                     checked={serverOn}
                     onChange={setK('serverReader')}
                     label="Read pages on the server (fast)"
-                    help="~200 KB per page. Chrome then only collects ads from the Ad Library. Off = Chrome reads the pages one at a time."
+                    help="~200 KB per page. Off = Chrome reads the pages one at a time."
                   />
                 </div>
                 {serverOn && (

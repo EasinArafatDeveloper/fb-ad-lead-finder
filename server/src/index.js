@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { col, connect, log } from './db.js';
 import { autoSyncAll } from './sheets.js';
 import { kickServerReader } from './serverReader.js';
+import { kickAdlibCollector, resetServerCollects } from './adlibCollector.js';
 import { janitor, resetServerClaims } from './pageQueue.js';
 import { closeStaleCollects } from './worker.js';
 import { notifyFinishedSearches } from './notify.js';
@@ -27,6 +28,10 @@ connect()
     // pages the server was reading when it stopped go straight back to the queue (docs/ENGINE.md §4 #6)
     const back = await resetServerClaims();
     if (back) log('info', `Server start: ${back} pages that were being read went back to the queue`);
+    const backJobs = await resetServerCollects();
+    if (backJobs) log('info', `Server start: ${backJobs} searches that were collecting on the server went back to the queue`);
+    // searches queued → collect them in the background on the server through the proxy pool
+    setInterval(() => kickAdlibCollector().catch((e) => log('warn', `Adlib collector: ${e.message}`)), 4000);
     // pages queued → read them on the server through the proxy list (picks up new pages within 5 s)
     setInterval(() => kickServerReader().catch((e) => log('warn', `Server reader: ${e.message}`)), 5000);
     // self-healing: lost pages back to the queue, pages Chrome never read given up (§4 #7, #8)

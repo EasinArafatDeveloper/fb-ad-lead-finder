@@ -7,7 +7,8 @@
 
 | অংশ | ফাইল | দায়িত্ব | কী করে না |
 |---|---|---|---|
-| **Collector** (Chrome extension) | `extension/` | Ad Library খুলে ad সংগ্রহ করে, server-এ পাঠায়। Proxy ছাড়া (সরাসরি)। | পেজ পড়ে না (server mode-এ) |
+| **Server Collector** | `server/src/adlibCollector.js` | ব্যাকগ্রাউন্ডে সরাসরি সার্ভার থেকে Proxy রোটেশন (`resiList` + `proxyList`) দিয়ে Ad Library থেকে ad সংগ্রহ করে (`serverCollector: true` থাকলে)। কোনো Chrome tab লাগে না। | পেজ পড়ে না |
+| **Collector** (Chrome extension) | `extension/` | ম্যানুয়াল কালেকশন বা `serverCollector: false` থাকলে Ad Library খুলে ad সংগ্রহ করে, server-এ পাঠায়। | পেজ পড়ে না (server mode-এ) |
 | **Queue** | `server/src/pageQueue.js` | পেজের অবস্থা বদলানোর **একমাত্র** জায়গা: claim, release, done, fail, Chrome-কে দেওয়া। নিজে থেকে সেরে ওঠা (janitor)। | Facebook-এ যায় না |
 | **Reader** | `server/src/pageReader.js` | একটা পেজ একটা proxy IP দিয়ে আনে, HTML থেকে Intro কার্ড বের করে, উত্তরকে ৫ ভাগের একটায় ফেলে (নিচে দেখুন)। | অবস্থা বদলায় না |
 | **Server reader** | `server/src/serverReader.js` | কয়েকটা lane একসাথে চালায়; প্রতিটা lane: IP নাও → পেজ নাও → পড়ো → ফল Queue-কে দাও। | সিদ্ধান্ত Queue/Proxy pool-এর |

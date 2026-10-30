@@ -11,6 +11,7 @@ import { ensureProject, oid } from './projects.js';
 import { workerInfo } from './worker-state.js';
 import { pickProxy, proxyPool, proxyWorked, restProxy, restProxyBriefly } from './proxies.js';
 import { claimPage, releasePage, wallOnPage } from './pageQueue.js';
+import { kickAdlibCollector, serverCollects } from './adlibCollector.js';
 import { aboutUrl, mainUrl, startOfToday, uniq } from './util.js';
 
 const r = express.Router();
@@ -62,7 +63,7 @@ export const limitRestMs = (pc) => (pc?.gentle === true ? GENTLE.restAfterLimitM
 
 /** Searches whose Ad Library tab went silent: closed with everything collected so far (called every minute). */
 export async function closeStaleCollects() {
-  const stale = await col('jobs').find({ phase: 'collecting', lastActivity: { $lt: new Date(Date.now() - STALE_COLLECT_MS) } }).toArray();
+  const stale = await col('jobs').find({ phase: 'collecting', collector: { $ne: 'server' }, lastActivity: { $lt: new Date(Date.now() - STALE_COLLECT_MS) } }).toArray();
   for (const j of stale) {
     const done = await col('jobs').findOneAndUpdate(
       { _id: j._id, phase: 'collecting' },
@@ -139,6 +140,10 @@ r.get('/next-collect', ah(async (req) => {
   if (!canCollect(extVersion(req))) return { job: null, reason: OUTDATED };
   const s = await getSettings();
   if (!s.running) return { job: null, reason: s.pausedReason || 'paused' };
+  if (serverCollects(s)) {
+    kickAdlibCollector().catch(() => {});
+    return { job: null, reason: 'searches are collected on the server in the background' };
+  }
   // a computer the admin set to "doesn't run Dashboard searches" (Settings → Worker → Computers)
   const pc = req.pcId ? await getPc(req.pcId) : null;
   if (pc && pc.takeQueue === false) return { job: null, reason: 'this PC does not run Dashboard searches' };

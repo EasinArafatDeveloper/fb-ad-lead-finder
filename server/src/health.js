@@ -4,6 +4,7 @@
 import { col } from './db.js';
 import { isBadIp, proxyPool } from './proxies.js';
 import { serverReads, COLLECT_SILENT_WARN_MS, STALE_COLLECT_MS } from './worker.js';
+import { serverCollects } from './adlibCollector.js';
 import { workerInfo } from './worker-state.js';
 import { startOfToday } from './util.js';
 
@@ -21,9 +22,10 @@ export async function engineHealth(s, viewerWs = null) {
   const now = Date.now();
   const pool = proxyPool(s);
   const onServer = serverReads(s, pool);
+  const onServerCollect = serverCollects(s);
   const [worker, collecting, queuedJobs, pending, forChrome, visits, recentErrors, ipStates] = await Promise.all([
     workerInfo(viewerWs),
-    col('jobs').find({ phase: 'collecting' }).project({ keyword: 1, lastActivity: 1, adsSeen: 1, maxAds: 1, pageIds: 1 }).toArray(),
+    col('jobs').find({ phase: 'collecting' }).project({ keyword: 1, lastActivity: 1, adsSeen: 1, maxAds: 1, pageIds: 1, collector: 1 }).toArray(),
     col('jobs').countDocuments({ phase: 'queued' }),
     col('pages').countDocuments({ scrapeStatus: 'pending' }),
     col('pages').countDocuments({ scrapeStatus: 'pending', needsBrowser: true }),
@@ -35,8 +37,9 @@ export async function engineHealth(s, viewerWs = null) {
   // 1 — stopped
   if (!s.running) add('error', 'paused', 'The worker is paused', s.pausedReason || 'Paused by hand.', 'Fix the reason above if there is one, then press Resume at the top.');
 
-  // 2 — the Chrome extension (it collects ads, and reads the few pages the server can't)
-  const needChrome = queuedJobs > 0 || collecting.length > 0 || forChrome > 0 || (!onServer && pending > 0);
+  // 2 — the Chrome extension (it collects ads when serverCollector is off, and reads the few pages the server can't)
+  const chromeCollects = collecting.filter((j) => j.collector !== 'server');
+  const needChrome = (!onServerCollect && (queuedJobs > 0 || chromeCollects.length > 0)) || forChrome > 0 || (!onServer && pending > 0);
   if (!worker || worker.seenAgo > WORKER_OFFLINE_SEC) {
     if (needChrome) add('error', 'extension-offline', 'The Chrome extension is not connected', worker ? `Last seen ${ago(worker.seenAgo)} ago.` : 'It never connected.', 'Open Chrome with the FB Ad Lead Finder extension on (popup: server URL + worker key, then Save).');
   } else if (worker.outdated) {
@@ -51,7 +54,7 @@ export async function engineHealth(s, viewerWs = null) {
   }
 
   // 3 — Ad Library tabs that went silent
-  for (const j of collecting) {
+  for (const j of chromeCollects) {
     const silent = (now - new Date(j.lastActivity || 0).getTime()) / 1000;
     if (silent * 1000 >= COLLECT_SILENT_WARN_MS) {
       const left = Math.max(0, Math.round((STALE_COLLECT_MS / 1000 - silent) / 60));

@@ -7,6 +7,7 @@ import { sendInsightsWorkbook } from './insightsExcel.js';
 import { clampMaxAds, getSettings } from './settings.js';
 import { accountOf, requirePerk } from './billing.js';
 import { checkSearchQuota } from './routes.js';
+import { kickAdlibCollector } from './adlibCollector.js';
 import { deleteProject, deleteSheetDocs, itemCount, loadSheet, oid, projectStats, queuePages, saveSheet } from './projects.js';
 
 const r = express.Router();
@@ -144,6 +145,7 @@ r.post('/projects/:id/search', ah(async (req, res) => {
     url: adLibraryUrl(p.keyword, p.country, filters), phase: 'queued', manual: false, adsSeen: 0, pageIds: [], projectId: p._id, createdAt: new Date(),
   });
   await activity('queued', `"${p.name}" — queued to search again`, { workspaceId: req.ws, projectId: p._id });
+  kickAdlibCollector().catch(() => {});
   return { ok: true };
 }));
 

@@ -39,6 +39,7 @@ export const DEFAULTS = {
   // with a proxy list the server reads the pages itself (serverReader.js): this many at once, each through
   // its own IP, and one IP is used at most once every ipGapSec seconds
   serverReader: true,
+  serverCollector: false,
   serverParallel: 5,
   ipGapSec: 20,
 };
@@ -49,7 +50,7 @@ export const MAX_ADS_LIMIT = 50000;
 export const clampMaxAds = (n, fallback = 200) => Math.min(MAX_ADS_LIMIT, Math.max(10, Math.round(Number(n) || fallback)));
 
 const NUMBER_KEYS = ['delayMin', 'delayMax', 'dailyLimit', 'maxAds', 'parallel', 'proxyPort', 'serverParallel', 'ipGapSec'];
-const BOOL_KEYS = ['running', 'insights', 'websiteFallback', 'closeAdTab', 'fullDetails', 'proxyEnabled', 'serverReader', 'proxyStaticOn', 'resiOn'];
+const BOOL_KEYS = ['running', 'insights', 'websiteFallback', 'closeAdTab', 'fullDetails', 'proxyEnabled', 'serverReader', 'serverCollector', 'proxyStaticOn', 'resiOn'];
 const STRING_KEYS = ['pausedReason', 'proxyHost', 'proxyUser', 'proxyPass'];
 
 export async function getSettings() {

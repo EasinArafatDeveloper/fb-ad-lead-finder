@@ -20,6 +20,7 @@ import { listInbox, markRead, unreadCount } from './inbox.js';
 import { getSmtp, parseRecipients, prefsOf, saveSmtp, sendTest, smtpPublic, smtpReady, vapidKeys } from './notify.js';
 import { MIN_COLLECT_VERSION, canCollect, serverReads } from './worker.js';
 import { serverReaderLanes, serverReaderNow } from './serverReader.js';
+import { kickAdlibCollector } from './adlibCollector.js';
 import { engineHealth } from './health.js';
 import { adLibraryUrl, cleanAdFilters, cleanEmails, startOfToday, uniq, uniqPhones } from './util.js';
 
@@ -362,7 +363,7 @@ r.get('/jobs', ah(async (req) => {
     return {
       ...jobDTO(j), projectId: j.projectId ? String(j.projectId) : null, scraped: c.scraped || 0, withContact: c.withContact || 0, pending: c.pending || 0,
       // which computer collected it: for the team only (a customer sees what was found, not where)
-      pc: isAdmin(req) && j.collector ? names.get(j.collector) || null : null,
+      pc: isAdmin(req) && j.collector ? (j.collector === 'server' ? 'Server (Background)' : names.get(j.collector) || null) : null,
       ...(isAdmin(req) ? {} : { stuckNote: j.stuckNote ? 'stuck' : '', collector: undefined }),
     };
   });
@@ -438,6 +439,7 @@ r.post('/jobs', ah(async (req) => {
   }
   await col('jobs').insertMany(docs);
   for (const d of docs) await activity('queued', `Search queued: "${d.keyword}" (${country})`, { workspaceId: req.ws, projectId: d.projectId });
+  kickAdlibCollector().catch(() => {});
   return { created: docs.length, skipped };
 }));
 
@@ -474,6 +476,7 @@ r.post('/jobs/:id/requeue', ah(async (req) => {
   if (j.kind === 'links') throw httpError(400, 'This was made from pasted links — use Re-scrape on its leads, or paste the links again');
   await checkSearchQuota(req, 1);
   await col('jobs').updateOne({ _id: j._id }, { $set: { phase: 'queued', createdAt: new Date(), adsSeen: 0 }, $unset: { collectedAt: '', stoppedAt: '', note: '', notifiedAt: '' } });
+  kickAdlibCollector().catch(() => {});
   return { ok: true };
 }));
 

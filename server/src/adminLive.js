@@ -78,13 +78,13 @@ export async function liveActivity() {
         ads: j.adsSeen || 0, maxAds: j.maxAds || null, pages: (j.pageIds || []).length, read: c.read || 0, pendingPages: c.pending || 0, withContact: c.withContact || 0,
         createdAt: j.createdAt, startedAt: j.startedAt || null, collectedAt: j.collectedAt || null, silentSec: j.phase === 'collecting' ? secAgo(j.lastActivity || j.startedAt) : null,
         tabHidden: !!j.tabHidden, note: j.stuckNote || (j.note && !['done', 'pasted links'].includes(j.note) ? j.note : ''), projectId: j.projectId ? String(j.projectId) : null,
-        pc: pcDTO(pcOf.get(j.collector)),
+        pc: j.collector === 'server' ? { name: 'Server (Background)', version: 'server', ip: 'proxy-pool', mode: 'pager', online: true } : pcDTO(pcOf.get(j.collector)),
       };
     };
     const p = pendingOf.get(key) || {};
     const issues = problems.filter((a) => String(a.workspaceId) === key).slice(0, 6).map((a) => ({ at: a.ts, type: a.type, msg: a.msg }));
     if (!acc.unlimited && acc.credits <= 0 && (p.pending || mine.some((j) => ['queued', 'collecting'].includes(j.phase)))) issues.unshift({ at: new Date(), type: 'credits', msg: `No credits left (${acc.credits}) — reading waits` });
-    for (const j of mine.filter((x) => x.phase === 'collecting' && secAgo(x.lastActivity || x.startedAt) > 60)) issues.unshift({ at: new Date(), type: 'silent', msg: `"${j.keyword}" — the Ad Library tab hasn't reported for ${secAgo(j.lastActivity || j.startedAt)} s` });
+    for (const j of mine.filter((x) => x.phase === 'collecting' && x.collector !== 'server' && secAgo(x.lastActivity || x.startedAt) > 60)) issues.unshift({ at: new Date(), type: 'silent', msg: `"${j.keyword}" — the Ad Library tab hasn't reported for ${secAgo(j.lastActivity || j.startedAt)} s` });
     accounts.push({
       workspaceId: key, name: owner?.name || wsOf.get(key)?.name || '', email: owner?.email || '', team: owner?.role === 'admin' || wsOf.get(key)?.plan === 'internal',
       plan: acc.planName || acc.plan, credits: acc.unlimited ? null : acc.credits,
